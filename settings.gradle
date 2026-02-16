@@ -1,0 +1,11 @@
+rootProject.name = 'CloudOrder'
+
+include 'eurekaServer'
+include 'customerService'
+include 'productService'
+include 'orderCommandService'
+include 'OrderQueryService'
+include 'common'
+include 'cartService'
+include 'secKillService'
+include 'apiGateway'

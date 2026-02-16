@@ -1,0 +1,3 @@
+jwt:
+  publicKeyPath: config/rsa.pub
+  privateKeyPath: config/rsa.pri

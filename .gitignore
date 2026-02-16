@@ -1,0 +1,62 @@
+# Java
+*.class
+*.jar
+*.war
+*.ear
+
+# Maven
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+
+# Gradle (如果用的话)
+.gradle/
+build/
+
+# IDE
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+*.swp
+
+# Spring Boot
+*.log
+logs/
+
+# 敏感文件
+config/rsa.pub
+config/rsa.pri
+application-local.yml
+application-prod.yml
+*.pem
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker (保留 Dockerfile，忽略其他)
+docker-compose.override.yml
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+.terraform.lock.hcl
+
+# 测试报告
+*.html
+*.csv
+locust_tests/*.html
+locust_tests/*.csv
+locust_tests/error_log.json
+
+# 临时文件
+*.tmp
+*.bak
+
+*.pri
+*.pub

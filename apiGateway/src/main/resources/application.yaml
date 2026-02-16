@@ -1,0 +1,31 @@
+server:
+  port: 8085
+
+spring:
+  main:
+    web-application-type: reactive
+  application:
+    name: api-gateway
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6380}
+  cloud:
+    gateway:
+      server:
+        webflux:
+          routes:
+            - id: customer-service
+              uri: ${CUSTOMER_SERVICE_URL:http://localhost:8088}
+              predicates:
+                - Path=/api/auth/**
+            - id: seckill-service
+              uri: ${SECKILL_SERVICE_URL:http://localhost:8084}
+              predicates:
+                - Path=/api/seckill/**
+rate-limit:
+  max-requests: 10
+  window-seconds: 60
+
+jwt:
+  publicKeyPath: ./config/rsa.pub

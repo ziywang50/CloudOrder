@@ -1,0 +1,121 @@
+version: '3.8'
+
+services:
+
+  # DynamoDB Local
+  dynamodb-local:
+    image: amazon/dynamodb-local
+    container_name: dynamodb-local
+    ports:
+      - "8003:8000"
+    command: "-jar DynamoDBLocal.jar -sharedDb -inMemory"
+
+  db:
+    image: postgres:15.2-alpine
+    container_name: postgres-local
+    environment:
+      POSTGRES_DB: customerdb
+      POSTGRES_PASSWORD: secret
+      TZ: UTC
+    volumes:
+      - customerservice-pg-local:/var/lib/postgresql/data
+    ports:
+      - "5435:5432"
+
+  db-order:
+    image: postgres:15.2-alpine
+    container_name: postgres-order
+    environment:
+      POSTGRES_DB: order_write_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      TZ: UTC
+    volumes:
+      - orderservice-pg-local:/var/lib/postgresql/data
+    ports:
+      - "5438:5432"
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis-cache-local
+    restart: always
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kafka:
+    image: apache/kafka:4.0.0
+    container_name: kafka-local
+    user: root
+    ports:
+      - "9092:9092"
+    environment:
+      #No docker listener
+      KAFKA_LISTENERS: CONTROLLER://localhost:9091,HOST://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,HOST:PLAINTEXT
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9091
+      KAFKA_INTER_BROKER_LISTENER_NAME: HOST
+      # KAFKA_INTER_BROKER_LISTENER_NAME: DOCKER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_LOG_DIRS: /tmp/kafka-logs
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+    volumes:
+      - kafka_data:/tmp/kafka-logs
+    healthcheck:
+      test: [ "CMD-SHELL", "kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1" ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: elasticsearch-local
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Read database
+  db-order-read:
+    image: postgres:15.2-alpine
+    container_name: postgres-order-read
+    environment:
+      POSTGRES_DB: order_read_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      TZ: UTC
+    volumes:
+      - orderservice-pg-read-local:/var/lib/postgresql/data
+    ports:
+      - "5439:5432"
+
+volumes:
+  orderservice-pg-local:
+  orderservice-pg-read-local:
+  customerservice-pg-local:
+  kafka_data:
+  redis_data:
+  es_data:

@@ -1,0 +1,38 @@
+server:
+  port: 8091
+
+spring:
+  application:
+    name: order-query-service
+  
+  datasource:
+    url: jdbc:postgresql://${READ_DB_HOST:localhost}:${READ_DB_PORT:5439}/${READ_DB_NAME:order_read_db}
+    username: ${READ_DB_USER:postgres}
+    password: ${READ_DB_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 50
+      minimum-idle: 20
+      connection-timeout: 30000
+  
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+  
+  data:
+    redis:
+      port: ${REDIS_PORT:6380}
+      host: ${REDIS_HOST:localhost}
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_URI:http://localhost:8761/eureka}
+
+logging:
+  level:
+    com.highvia.orderservice.client.ProductClient: INFO

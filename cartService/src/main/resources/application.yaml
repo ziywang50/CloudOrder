@@ -1,0 +1,13 @@
+spring:
+  application:
+    name: cart-service
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6380}
+
+server:
+  port: 8083
+
+jwt:
+  publicKeyPath: ${JWT_PUBLIC_KEY_PATH:./config/rsa.pub}
