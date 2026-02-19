@@ -79,7 +79,9 @@ resource "aws_iam_role_policy" "ecs_execution_secrets" {
         ]
         Resource = [
           aws_secretsmanager_secret.db_password.arn,
-          aws_secretsmanager_secret.admin_secret.arn
+          aws_secretsmanager_secret.admin_secret.arn,
+ 	  aws_secretsmanager_secret.jwt_private_key.arn,
+  	  aws_secretsmanager_secret.jwt_public_key.arn
         ]
       }
     ]

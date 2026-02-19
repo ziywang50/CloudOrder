@@ -1,5 +1,5 @@
+FROM gradle:8.10-jdk21 AS build
 ARG SERVICE
-FROM gradle:8.5-jdk21 AS build
 WORKDIR /workspace
 
 COPY gradle gradle
@@ -14,14 +14,19 @@ COPY OrderQueryService OrderQueryService
 COPY productService productService
 COPY secKillService secKillService
 
-RUN ./gradlew :${SERVICE}:bootJar --no-daemon
+RUN set -e; \
+    ./gradlew :${SERVICE}:bootJar --no-daemon; \
+    jar=$(ls /workspace/${SERVICE}/build/libs/*.jar | grep -v 'plain.jar' | head -n 1); \
+    cp "$jar" /workspace/app.jar
 
-FROM eclipse-temurin:21-jre
+FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+ARG SERVICE
 
-COPY --from=build /workspace/${SERVICE}/build/libs/*.jar /app/app.jar
+RUN apk add --no-cache curl
+
+COPY --from=build /workspace/app.jar /app/app.jar
 COPY config/rsa.pub /app/config/rsa.pub
 
 ENV JAVA_OPTS=""

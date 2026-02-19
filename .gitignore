@@ -33,6 +33,10 @@ config/rsa.pri
 application-local.yml
 application-prod.yml
 *.pem
+*.tfvars
+*.tfvars.json
+config/rsa-private.pem
+config/rsa-public.pem
 
 # OS
 .DS_Store
@@ -60,3 +64,6 @@ locust_tests/error_log.json
 
 *.pri
 *.pub
+
+#deploy
+deploy.ps1
