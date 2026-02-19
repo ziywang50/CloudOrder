@@ -62,3 +62,14 @@ jwt:
   publicKeyPath: ${JWT_PUBLIC_KEY_PATH:./config/rsa.pub}
 admin:
   secretKey: ${ADMIN_SECRET_KEY:your-super-secret-key}
+
+---
+spring:
+  config:
+    activate:
+      on-profile: prod
+eureka:
+  client:
+    enabled: false
+    register-with-eureka: false
+    fetch-registry: false

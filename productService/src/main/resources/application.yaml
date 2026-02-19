@@ -37,3 +37,15 @@ eureka:
 
 jwt:
   publicKeyPath: ${JWT_PUBLIC_KEY_PATH:./config/rsa.pub}
+
+---
+spring:
+  config:
+    activate:
+      on-profile: prod
+
+eureka:
+  client:
+    enabled: false
+    register-with-eureka: false
+    fetch-registry: false

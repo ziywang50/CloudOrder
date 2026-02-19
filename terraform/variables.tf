@@ -36,7 +36,7 @@ variable "db_password" {
 
 variable "db_instance_class" {
   type    = string
-  default = "db.t3.micro"
+  default = "db.t3.medium"
 }
 
 variable "admin_secret_key" {
@@ -46,15 +46,27 @@ variable "admin_secret_key" {
 
 variable "redis_node_type" {
   type    = string
-  default = "cache.t3.micro"
+  default = "cache.m5.large"
 }
 
 variable "opensearch_instance_type" {
   type    = string
-  default = "t3.small.search"
+  default = "m5.large.search"
 }
 
 variable "msk_instance_type" {
   type    = string
-  default = "kafka.t3.small"
+  default = "kafka.m5.large"
+}
+
+variable "jwt_private_key" {
+  description = "JWT RSA private key"
+  type        = string
+  sensitive   = true
+}
+
+variable "jwt_public_key" {
+  description = "JWT RSA public key"
+  type        = string
+  sensitive   = true
 }

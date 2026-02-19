@@ -1,5 +1,5 @@
 ARG SERVICE
-FROM gradle:8.5-jdk17 AS build
+FROM gradle:8.5-jdk21 AS build
 WORKDIR /workspace
 
 COPY gradle gradle
@@ -16,13 +16,13 @@ COPY secKillService secKillService
 
 RUN ./gradlew :${SERVICE}:bootJar --no-daemon
 
-FROM eclipse-temurin:17-jre
+FROM eclipse-temurin:21-jre
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /workspace/${SERVICE}/build/libs/*.jar /app/app.jar
-COPY config /app/config
+COPY config/rsa.pub /app/config/rsa.pub
 
 ENV JAVA_OPTS=""
 

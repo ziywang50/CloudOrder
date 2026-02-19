@@ -10,8 +10,12 @@ output "customer_db_endpoint" {
   value = aws_db_instance.customer.address
 }
 
-output "order_db_endpoint" {
-  value = aws_db_instance.order.address
+output "order_write_endpoint" {
+  value = aws_db_instance.order_write.address
+}
+
+output "order_read_endpoint" {
+  value = aws_db_instance.order_read.address
 }
 
 output "redis_endpoint" {

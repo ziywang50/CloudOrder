@@ -47,3 +47,15 @@ services:
     url: ${CART_SERVICE_URL:http://localhost:8083}
   product:
     url: ${PRODUCT_SERVICE_URL:http://localhost:8089}
+
+---
+spring:
+  config:
+    activate:
+      on-profile: prod
+
+eureka:
+  client:
+    enabled: false
+    register-with-eureka: false
+    fetch-registry: false

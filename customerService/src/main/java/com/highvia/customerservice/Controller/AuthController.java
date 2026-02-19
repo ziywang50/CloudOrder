@@ -27,7 +27,7 @@ public class AuthController {
     private final String publicKeyPath;
     private final String adminSecretKey;
 
-    // Constructor injection (better!)
+    // Constructor injection
     public AuthController(
             CustomerRepository customerRepository,
             PasswordEncoder passwordEncoder,

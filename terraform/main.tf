@@ -7,43 +7,63 @@ locals {
     apiGateway = {
       service_name   = "api-gateway"
       container_port = 8085
-      cpu            = 256
-      memory         = 512
+      cpu            = 1024
+      memory         = 2048
+      desired_count  = 4
       public_lb      = true
       env = [
+        { name = "SPRING_PROFILES_ACTIVE", value = "prod" },
         { name = "REDIS_HOST", value = aws_elasticache_cluster.redis.cache_nodes[0].address },
         { name = "REDIS_PORT", value = tostring(aws_elasticache_cluster.redis.cache_nodes[0].port) },
         { name = "CUSTOMER_SERVICE_URL", value = "http://customer-service.${local.namespace_name}:8088" },
         { name = "SECKILL_SERVICE_URL", value = "http://seckill-service.${local.namespace_name}:8084" }
       ]
+      secrets = [
+{ name = "JWT_PUBLIC_KEY", valueFrom = aws_secretsmanager_secret_version.jwt_public_key.arn }
+	]
     }
 
     cartService = {
       service_name   = "cart-service"
       container_port = 8083
-      cpu            = 256
-      memory         = 512
+      cpu            = 512
+      memory         = 1024
+      desired_count  = 3
       public_lb      = false
       env = [
+        { name = "SPRING_PROFILES_ACTIVE", value = "prod" },
         { name = "REDIS_HOST", value = aws_elasticache_cluster.redis.cache_nodes[0].address },
         { name = "REDIS_PORT", value = tostring(aws_elasticache_cluster.redis.cache_nodes[0].port) },
         { name = "EUREKA_URI", value = "http://eureka-server.${local.namespace_name}:8761/eureka" }
       ]
+      secrets = []
     }
 
     customerService = {
       service_name   = "customer-service"
       container_port = 8088
-      cpu            = 512
-      memory         = 1024
+      cpu            = 1024
+      memory         = 2048
+      desired_count  = 3
       public_lb      = false
       env = [
+        { name = "SPRING_PROFILES_ACTIVE", value = "prod" },
         { name = "DATABASE_URL", value = aws_db_instance.customer.address },
         { name = "DATABASE_PORT", value = tostring(aws_db_instance.customer.port) },
         { name = "DATABASE_USERNAME", value = var.db_username },
-        { name = "DATABASE_PASSWORD", value = var.db_password },
-        { name = "EUREKA_URI", value = "http://eureka-server.${local.namespace_name}:8761/eureka" },
-        { name = "ADMIN_SECRET_KEY", value = var.admin_secret_key }
+        { name = "EUREKA_URI", value = "http://eureka-server.${local.namespace_name}:8761/eureka" }
+      ]
+      secrets = [
+        {
+          name      = "DATABASE_PASSWORD"
+          valueFrom = aws_secretsmanager_secret_version.db_password.arn
+        },
+        {
+          name      = "ADMIN_SECRET_KEY"
+          valueFrom = aws_secretsmanager_secret_version.admin_secret.arn
+        },
+	{ name = "JWT_PRIVATE_KEY", valueFrom = aws_secretsmanager_secret_version.jwt_private_key.arn },
+	{ name = "JWT_PUBLIC_KEY",  valueFrom = aws_secretsmanager_secret_version.jwt_public_key.arn }
       ]
     }
 
@@ -52,75 +72,99 @@ locals {
       container_port = 8761
       cpu            = 256
       memory         = 512
+      desired_count  = 1
       public_lb      = false
-      env            = []
+      env            = [
+	{ name = "SPRING_PROFILES_ACTIVE", value = "prod" }
+      ]
+      secrets        = []
     }
 
     orderCommandService = {
       service_name   = "order-command-service"
       container_port = 8090
-      cpu            = 512
-      memory         = 1024
+      cpu            = 1024
+      memory         = 2048
+      desired_count  = 3
       public_lb      = false
       env = [
-        { name = "DB_HOST", value = aws_db_instance.order.address },
-        { name = "DB_PORT", value = tostring(aws_db_instance.order.port) },
+        { name = "SPRING_PROFILES_ACTIVE", value = "prod" },
+        { name = "DB_HOST", value = aws_db_instance.order_write.address },
+        { name = "DB_PORT", value = tostring(aws_db_instance.order_write.port) },
         { name = "DB_NAME", value = "order_write_db" },
         { name = "DB_USER", value = var.db_username },
-        { name = "DB_PASSWORD", value = var.db_password },
         { name = "EUREKA_URI", value = "http://eureka-server.${local.namespace_name}:8761/eureka" },
         { name = "KAFKA_BOOTSTRAP_SERVERS", value = aws_msk_cluster.kafka.bootstrap_brokers },
         { name = "CART_SERVICE_URL", value = "http://cart-service.${local.namespace_name}:8083" },
         { name = "PRODUCT_SERVICE_URL", value = "http://product-service.${local.namespace_name}:8089" }
+      ]
+      secrets = [
+        {
+          name      = "DB_PASSWORD"
+          valueFrom = aws_secretsmanager_secret_version.db_password.arn
+        }
       ]
     }
 
     orderQueryService = {
       service_name   = "order-query-service"
       container_port = 8091
-      cpu            = 512
-      memory         = 1024
+      cpu            = 1024
+      memory         = 2048
+      desired_count  = 4
       public_lb      = false
       env = [
-        { name = "READ_DB_HOST", value = aws_db_instance.order.address },
-        { name = "READ_DB_PORT", value = tostring(aws_db_instance.order.port) },
+        { name = "SPRING_PROFILES_ACTIVE", value = "prod" },
+        { name = "READ_DB_HOST", value = aws_db_instance.order_read.address },
+        { name = "READ_DB_PORT", value = tostring(aws_db_instance.order_read.port) },
         { name = "READ_DB_NAME", value = "order_read_db" },
         { name = "READ_DB_USER", value = var.db_username },
-        { name = "READ_DB_PASSWORD", value = var.db_password },
         { name = "REDIS_HOST", value = aws_elasticache_cluster.redis.cache_nodes[0].address },
         { name = "REDIS_PORT", value = tostring(aws_elasticache_cluster.redis.cache_nodes[0].port) },
         { name = "EUREKA_URI", value = "http://eureka-server.${local.namespace_name}:8761/eureka" }
+      ]
+      secrets = [
+        {
+          name      = "READ_DB_PASSWORD"
+          valueFrom = aws_secretsmanager_secret_version.db_password.arn
+        }
       ]
     }
 
     productService = {
       service_name   = "product-service"
       container_port = 8089
-      cpu            = 512
-      memory         = 1024
+      cpu            = 1024
+      memory         = 2048
+      desired_count  = 3
       public_lb      = false
       env = [
+        { name = "SPRING_PROFILES_ACTIVE", value = "prod" },
         { name = "ELASTICSEARCH_URL", value = "https://${aws_opensearch_domain.search.endpoint}" },
         { name = "KAFKA_BOOTSTRAP_SERVERS", value = aws_msk_cluster.kafka.bootstrap_brokers },
         { name = "DYNAMODB_ENDPOINT", value = "https://dynamodb.${var.aws_region}.amazonaws.com" },
         { name = "AWS_REGION", value = var.aws_region },
         { name = "EUREKA_URI", value = "http://eureka-server.${local.namespace_name}:8761/eureka" }
       ]
+      secrets = []
     }
 
     secKillService = {
       service_name   = "seckill-service"
       container_port = 8084
-      cpu            = 512
-      memory         = 1024
+      cpu            = 1024
+      memory         = 2048
+      desired_count  = 6
       public_lb      = false
       env = [
+        { name = "SPRING_PROFILES_ACTIVE", value = "prod" },
         { name = "REDIS_HOST", value = aws_elasticache_cluster.redis.cache_nodes[0].address },
         { name = "REDIS_PORT", value = tostring(aws_elasticache_cluster.redis.cache_nodes[0].port) },
         { name = "EUREKA_URI", value = "http://eureka-server.${local.namespace_name}:8761/eureka" },
         { name = "KAFKA_BOOTSTRAP_SERVERS", value = aws_msk_cluster.kafka.bootstrap_brokers },
         { name = "PRODUCT_SERVICE_URL", value = "http://product-service.${local.namespace_name}:8089" }
       ]
+      secrets = []
     }
   }
 }
@@ -299,8 +343,8 @@ resource "aws_db_instance" "customer" {
   publicly_accessible    = false
 }
 
-resource "aws_db_instance" "order" {
-  identifier             = "${var.project_name}-order"
+resource "aws_db_instance" "order_write" {
+  identifier             = "${var.project_name}-order-write"
   engine                 = "postgres"
   engine_version         = "15.3"
   instance_class         = var.db_instance_class
@@ -315,16 +359,32 @@ resource "aws_db_instance" "order" {
   publicly_accessible    = false
 }
 
+resource "aws_db_instance" "order_read" {
+  identifier             = "${var.project_name}-order-read"
+  engine                 = "postgres"
+  engine_version         = "15.3"
+  instance_class         = var.db_instance_class
+  allocated_storage      = 20
+  db_name                = "order_read_db"
+  username               = var.db_username
+  password               = var.db_password
+  db_subnet_group_name   = aws_db_subnet_group.main.name
+  vpc_security_group_ids = [aws_security_group.data_services.id]
+  skip_final_snapshot    = true
+  deletion_protection    = false
+  publicly_accessible    = false
+}
+
 # MSK (Kafka)
 
 resource "aws_msk_cluster" "kafka" {
   cluster_name           = "${var.project_name}-kafka"
   kafka_version          = "3.6.0"
-  number_of_broker_nodes = 2
+  number_of_broker_nodes = 3
 
   broker_node_group_info {
     instance_type  = var.msk_instance_type
-    client_subnets = data.aws_subnets.default.ids
+    client_subnets = slice(tolist(data.aws_subnets.default.ids), 0, 3)
     security_groups = [aws_security_group.data_services.id]
   }
 
@@ -332,6 +392,12 @@ resource "aws_msk_cluster" "kafka" {
     encryption_in_transit {
       client_broker = "PLAINTEXT"
       in_cluster    = true
+    }
+  }
+
+  storage_info {       
+    ebs_storage_info {
+      volume_size = 100
     }
   }
 }
@@ -355,7 +421,7 @@ resource "aws_opensearch_domain" "search" {
   }
 
   vpc_options {
-    subnet_ids         = data.aws_subnets.default.ids
+    subnet_ids         = [tolist(data.aws_subnets.default.ids)[0]]
     security_group_ids = [aws_security_group.data_services.id]
   }
 
@@ -395,6 +461,7 @@ resource "aws_ecs_task_definition" "service" {
         { containerPort = each.value.container_port }
       ]
       environment = each.value.env
+      secrets     = each.value.secrets
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -484,7 +551,7 @@ resource "aws_ecs_service" "service" {
   name            = each.value.service_name
   cluster         = aws_ecs_cluster.this.id
   task_definition = aws_ecs_task_definition.service[each.key].arn
-  desired_count   = var.ecs_desired_count
+  desired_count   = each.value.desired_count
   launch_type     = "FARGATE"
 
   network_configuration {
@@ -507,4 +574,56 @@ resource "aws_ecs_service" "service" {
   }
 
   depends_on = [aws_lb_listener.api]
+}
+
+# ==========================================
+# Secrets Manager - Store Sensitive Data
+# ==========================================
+
+# 1. Create a secret for database password
+resource "aws_secretsmanager_secret" "db_password" {
+  name        = "${var.project_name}-db-password"
+  description = "Database password for all RDS instances"
+  
+  recovery_window_in_days = 0
+}
+
+# 2. Put the actual password value into the secret
+resource "aws_secretsmanager_secret_version" "db_password" {
+  secret_id     = aws_secretsmanager_secret.db_password.id
+  secret_string = var.db_password  # 从variables.tf读取
+}
+
+# 3. Create a secret for admin secret key
+resource "aws_secretsmanager_secret" "admin_secret" {
+  name        = "${var.project_name}-admin-secret"
+  description = "Admin secret key for authentication"
+  
+  recovery_window_in_days = 0
+}
+
+# 4. Put the admin secret value
+resource "aws_secretsmanager_secret_version" "admin_secret" {
+  secret_id     = aws_secretsmanager_secret.admin_secret.id
+  secret_string = var.admin_secret_key
+}
+
+resource "aws_secretsmanager_secret" "jwt_private_key" {
+  name                    = "${var.project_name}-jwt-private-key"
+  recovery_window_in_days = 0
+}
+
+resource "aws_secretsmanager_secret_version" "jwt_private_key" {
+  secret_id     = aws_secretsmanager_secret.jwt_private_key.id
+  secret_string = var.jwt_private_key
+}
+
+resource "aws_secretsmanager_secret" "jwt_public_key" {
+  name                    = "${var.project_name}-jwt-public-key"
+  recovery_window_in_days = 0
+}
+
+resource "aws_secretsmanager_secret_version" "jwt_public_key" {
+  secret_id     = aws_secretsmanager_secret.jwt_public_key.id
+  secret_string = var.jwt_public_key
 }

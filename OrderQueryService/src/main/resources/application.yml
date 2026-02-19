@@ -36,3 +36,15 @@ eureka:
 logging:
   level:
     com.highvia.orderservice.client.ProductClient: INFO
+
+---
+spring:
+  config:
+    activate:
+      on-profile: prod
+
+eureka:
+  client:
+    enabled: false
+    register-with-eureka: false
+    fetch-registry: false

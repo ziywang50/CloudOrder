@@ -12,7 +12,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.data.redis.core.RedisTemplate;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -24,11 +26,19 @@ public class SeckillEventListener {
     private final OrderRepository orderRepository;
     private final KafkaTemplate<String, Object> kafkaTemplate;
     private final OrderService orderService;
+    private final RedisTemplate<String, String> redisTemplate;
 
     @KafkaListener(topics = "seckill-events", groupId = "order-command-service")
     public void handleSeckillConfirmed(SeckillConfirmedEvent event) {
-        log.info("[SECKILL EVENT] Received: {}", event.getReservationId());
+        String reservationId = event.getReservationId();
+        log.info("[SECKILL EVENT] Received: {}", reservationId);
+        String processedKey = "seckill:order:processed:" + reservationId;
         try{
+            Boolean acquired = redisTemplate.opsForValue().setIfAbsent(processedKey, "1", Duration.ofDays(7));
+            if (Boolean.FALSE.equals(acquired)) {
+                log.warn("[SECKILL] Duplicate event detected : {}", reservationId);
+                return;
+            }
             OrderEntity order = new OrderEntity();
             order.setUserId(Long.parseLong(event.getUserId()));
             order.setStatus("PENDING");
@@ -62,6 +72,14 @@ public class SeckillEventListener {
             log.info("[SAGA] Stock deduction requested: {}", savedOrder.getOrderId());
         } catch (Exception e) {
             log.error("[SECKILL EVENT] Error: {}", e.getMessage());
+            try {
+                redisTemplate.delete(processedKey);
+                log.info("[SECKILL] Cleaned up Redis key for failed order: {}", reservationId);
+            } catch (Exception redisError) {
+                log.error("[SECKILL] Failed to cleanup Redis key: {}", processedKey, redisError);
+            }
+
+            throw new RuntimeException("Failed to process seckill order: " + reservationId, e);
         }
     }
 }
