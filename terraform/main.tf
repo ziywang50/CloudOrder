@@ -115,13 +115,17 @@ locals {
       public_lb      = false
       env = [
         { name = "SPRING_PROFILES_ACTIVE", value = "prod" },
-        { name = "READ_DB_HOST", value = aws_db_instance.order_read.address },
-        { name = "READ_DB_PORT", value = tostring(aws_db_instance.order_read.port) },
+	{ name = "READ_DB_HOST_1", value = aws_db_instance.order_read_1.address },
+	{ name = "READ_DB_HOST_2", value = aws_db_instance.order_read_2.address },
+	{ name = "READ_DB_HOST_3", value = aws_db_instance.order_read_3.address },
+        { name = "READ_DB_PORT_1", value = tostring(aws_db_instance.order_read_1.port) },
+	{ name = "READ_DB_PORT_2", value = tostring(aws_db_instance.order_read_2.port) },
+	{ name = "READ_DB_PORT_3", value = tostring(aws_db_instance.order_read_3.port) },
         { name = "READ_DB_NAME", value = "order_read_db" },
         { name = "READ_DB_USER", value = var.db_username },
         { name = "REDIS_HOST", value = aws_elasticache_cluster.redis.cache_nodes[0].address },
         { name = "REDIS_PORT", value = tostring(aws_elasticache_cluster.redis.cache_nodes[0].port) },
-        { name = "EUREKA_URI", value = "http://eureka-server.${local.namespace_name}:8761/eureka" }
+        { name = "EUREKA_URI", value = "http://eureka-server.${local.namespace_name}:8761/eureka" },
       ]
       secrets = [
         {
@@ -330,7 +334,7 @@ resource "aws_db_subnet_group" "main" {
 resource "aws_db_instance" "customer" {
   identifier             = "${var.project_name}-customer"
   engine                 = "postgres"
-  engine_version         = "15.3"
+  engine_version         = "16"
   instance_class         = var.db_instance_class
   allocated_storage      = 20
   db_name                = "customerdb"
@@ -346,7 +350,7 @@ resource "aws_db_instance" "customer" {
 resource "aws_db_instance" "order_write" {
   identifier             = "${var.project_name}-order-write"
   engine                 = "postgres"
-  engine_version         = "15.3"
+  engine_version         = "16"
   instance_class         = var.db_instance_class
   allocated_storage      = 20
   db_name                = "order_write_db"
@@ -359,10 +363,43 @@ resource "aws_db_instance" "order_write" {
   publicly_accessible    = false
 }
 
-resource "aws_db_instance" "order_read" {
-  identifier             = "${var.project_name}-order-read"
+resource "aws_db_instance" "order_read_1" {
+  identifier             = "${var.project_name}-order-read-1"
   engine                 = "postgres"
-  engine_version         = "15.3"
+  engine_version         = "16"
+  instance_class         = var.db_instance_class
+  allocated_storage      = 20
+  db_name                = "order_read_db"
+  username               = var.db_username
+  password               = var.db_password
+  db_subnet_group_name   = aws_db_subnet_group.main.name
+  vpc_security_group_ids = [aws_security_group.data_services.id]
+  skip_final_snapshot    = true
+  deletion_protection    = false
+  publicly_accessible    = false
+}
+
+resource "aws_db_instance" "order_read_2" {
+  identifier             = "${var.project_name}-order-read-2"
+  engine                 = "postgres"
+  engine_version         = "16"
+  instance_class         = var.db_instance_class
+  allocated_storage      = 20
+  db_name                = "order_read_db"
+  username               = var.db_username
+  password               = var.db_password
+  db_subnet_group_name   = aws_db_subnet_group.main.name
+  vpc_security_group_ids = [aws_security_group.data_services.id]
+  skip_final_snapshot    = true
+  deletion_protection    = false
+  publicly_accessible    = false
+}
+
+
+resource "aws_db_instance" "order_read_3" {
+  identifier             = "${var.project_name}-order-read-3"
+  engine                 = "postgres"
+  engine_version         = "16"
   instance_class         = var.db_instance_class
   allocated_storage      = 20
   db_name                = "order_read_db"
@@ -380,24 +417,23 @@ resource "aws_db_instance" "order_read" {
 resource "aws_msk_cluster" "kafka" {
   cluster_name           = "${var.project_name}-kafka"
   kafka_version          = "3.6.0"
-  number_of_broker_nodes = 3
+  number_of_broker_nodes = 2
 
   broker_node_group_info {
     instance_type  = var.msk_instance_type
-    client_subnets = slice(tolist(data.aws_subnets.default.ids), 0, 3)
+    client_subnets = slice(tolist(data.aws_subnets.default.ids), 0, 2)
     security_groups = [aws_security_group.data_services.id]
+    storage_info {       
+      ebs_storage_info {
+        volume_size = 100
+      }
+    }
   }
 
   encryption_info {
     encryption_in_transit {
       client_broker = "PLAINTEXT"
       in_cluster    = true
-    }
-  }
-
-  storage_info {       
-    ebs_storage_info {
-      volume_size = 100
     }
   }
 }
@@ -432,7 +468,7 @@ resource "aws_opensearch_domain" "search" {
         Effect = "Allow"
         Principal = "*"
         Action = "es:*"
-        Resource = "${aws_opensearch_domain.search.arn}/*"
+        Resource = "*"
       }
     ]
   })
@@ -500,9 +536,6 @@ resource "aws_service_discovery_service" "service" {
     routing_policy = "WEIGHTED"
   }
 
-  health_check_custom_config {
-    failure_threshold = 1
-  }
 }
 
 # Network Load Balancer for API Gateway

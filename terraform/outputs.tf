@@ -14,9 +14,18 @@ output "order_write_endpoint" {
   value = aws_db_instance.order_write.address
 }
 
-output "order_read_endpoint" {
-  value = aws_db_instance.order_read.address
+output "order_read_endpoint_1" {
+  value = aws_db_instance.order_read_1.address
 }
+
+output "order_read_endpoint_2" {
+  value = aws_db_instance.order_read_2.address
+}
+
+output "order_read_endpoint_3" {
+  value = aws_db_instance.order_read_3.address
+}
+
 
 output "redis_endpoint" {
   value = aws_elasticache_cluster.redis.cache_nodes[0].address

@@ -6,14 +6,25 @@ spring:
     name: order-query-service
   
   datasource:
-    url: jdbc:postgresql://${READ_DB_HOST:localhost}:${READ_DB_PORT:5439}/${READ_DB_NAME:order_read_db}
-    username: ${READ_DB_USER:postgres}
-    password: ${READ_DB_PASSWORD:postgres}
-    driver-class-name: org.postgresql.Driver
     hikari:
       maximum-pool-size: 50
       minimum-idle: 20
       connection-timeout: 30000
+    read1:
+      url: jdbc:postgresql://${READ_DB_HOST_1:localhost}:${READ_DB_PORT_1:5439}/${READ_DB_NAME:order_read_db}
+      username: ${READ_DB_USER:postgres}
+      password: ${READ_DB_PASSWORD:postgres}
+      driver-class-name: org.postgresql.Driver
+    read2:
+      url: jdbc:postgresql://${READ_DB_HOST_2:localhost}:${READ_DB_PORT_2:5440}/${READ_DB_NAME:order_read_db}
+      username: ${READ_DB_USER:postgres}
+      password: ${READ_DB_PASSWORD:postgres}
+      driver-class-name: org.postgresql.Driver
+    read3:
+      url: jdbc:postgresql://${READ_DB_HOST_3:localhost}:${READ_DB_PORT_3:5441}/${READ_DB_NAME:order_read_db}
+      username: ${READ_DB_USER:postgres}
+      password: ${READ_DB_PASSWORD:postgres}
+      driver-class-name: org.postgresql.Driver
   
   jpa:
     hibernate:
