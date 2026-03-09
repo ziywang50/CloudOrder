@@ -73,4 +73,13 @@ public class ProductController {
         return productQueryService.getProductById(id);
     }
 
+    @GetMapping("/{id}/stock")
+    public Integer getStock(@PathVariable Long id) {
+        ProductEntity product = productService.getProduct(id);
+        if (product == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+        }
+        return product.getStock();
+    }
+
 }

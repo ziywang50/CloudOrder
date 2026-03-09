@@ -23,6 +23,10 @@ spring:
               uri: ${SECKILL_SERVICE_URL:http://localhost:8084}
               predicates:
                 - Path=/api/seckill/**
+            - id: seckill-admin
+              uri: ${SECKILL_SERVICE_URL:http://localhost:8084}
+              predicates:
+                - Path=/api/admin/seckill/**
 rate-limit:
   max-requests: 10
   window-seconds: 60

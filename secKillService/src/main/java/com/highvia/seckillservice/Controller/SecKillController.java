@@ -190,6 +190,27 @@ public class SecKillController {
         return ResponseEntity.ok(Map.of("success", true, "products", products));
     }
 
+    private ResponseEntity<SeckillResponse> createReservation(String userId, String productId, int quantity) {
+        try {
+            UUID reservationId = UUID.randomUUID();
+            long expiresAt = System.currentTimeMillis() + RESERVATION_TIMEOUT_MINUTES * 60 * 1000;
+            String reservationKey = "seckill:reservation:" + reservationId;
+            redisTemplate.opsForHash().putAll(reservationKey, Map.of(
+                    "userId", userId,
+                    "productId", productId,
+                    "quantity", String.valueOf(quantity)
+            ));
+            redisTemplate.expire(reservationKey, RESERVATION_TIMEOUT_MINUTES, TimeUnit.MINUTES);
+            return ResponseEntity.ok(
+                    new SeckillResponse(true, "Seckill Success", reservationId.toString(), expiresAt)
+            );
+        } catch (Exception e) {
+            log.error("Failed to create reservation for product: {}", productId, e);
+            return ResponseEntity.status(500).body(
+                    new SeckillResponse(false, "System Error", null, null)
+            );
+        }
+    }
 /**
  * Processes a flash sale purchase request.
  *
@@ -304,6 +325,22 @@ public class SecKillController {
                 );
             }
             else if (result != null && result == -1) {
+                String url = productServiceUrl + "/api/products/" + request.productId() + "/stock";
+                try {
+                    Integer stock = restTemplate.getForObject(url, Integer.class);
+                    if (stock != null && stock > 0) {
+                        redisTemplate.opsForValue().set(stockKey, String.valueOf(stock));
+                        result = redisTemplate.execute(script,
+                                Arrays.asList(stockKey, productDeductionHistoryKey),
+                                String.valueOf(request.quantity()), productDeductionHistoryField);
+                        if (result != null && result == 1) {
+                            return createReservation(userId, request.productId(), request.quantity());
+                        }
+                    }
+                } catch (Exception e) {
+                    log.error("Failed to restore stock from DB", e);
+                }
+
                 log.info("Can't find stock for this product: {}", request.productId());
                 return ResponseEntity.ok(
                         new SeckillResponse(false, "Cannot find product", null, null)

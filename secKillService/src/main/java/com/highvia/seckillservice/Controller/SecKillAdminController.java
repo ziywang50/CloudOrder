@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.ResponseEntity;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestTemplate;
 
@@ -34,6 +35,8 @@ public class SecKillAdminController {
 
     @Value("${services.product.url}")
     private String productServiceUrl;
+
+    private final int INTERVAL_SECONDS = 300000;
 
     /**
      * Retrieves product information from ProductService.
@@ -139,5 +142,28 @@ public class SecKillAdminController {
                 "stock", stock,
                 "message", "Seckill product created successfully"
         ));
+    }
+
+    @Scheduled(fixedRate = INTERVAL_SECONDS) //every 5 minutes
+    public void syncStockFromDB() {
+        Set<String> stockKeys = redisTemplate.keys("seckill:stock:*");
+        if (stockKeys == null) return;
+
+        for (String stockKey : stockKeys) {
+            String productId = stockKey.replace("seckill:stock:", "");
+            String url = productServiceUrl + "/api/products/" + productId + "/stock";
+            try {
+                Integer stock = restTemplate.getForObject(url, Integer.class);
+                if (stock != null) {
+                    String current = redisTemplate.opsForValue().get(stockKey);
+                    if (stock < Integer.parseInt(current)) {
+                        redisTemplate.opsForValue().set(stockKey, String.valueOf(stock));
+                        log.info("Synced stock for product {}: {}", productId, stock);
+                    }
+                }
+            } catch (Exception e) {
+                log.error("Failed to sync stock for product {}", productId, e);
+            }
+        }
     }
 }
