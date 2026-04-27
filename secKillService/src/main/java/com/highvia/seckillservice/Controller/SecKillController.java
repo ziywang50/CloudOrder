@@ -4,9 +4,17 @@ import com.highvia.seckillservice.dto.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
+import jakarta.annotation.PreDestroy;
+
+import jakarta.annotation.PreDestroy;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.RedisCallback;
+import org.springframework.data.redis.core.ScanOptions;
 
 //Java storage redis set. Ignore storeId for now for simplified design
 /* seckill:storage:{productId} = {"5"}
@@ -65,67 +73,87 @@ public class SecKillController {
 
     // Reservation timeout (15 minutes)
     private static final long RESERVATION_TIMEOUT_MINUTES = 15;
+    private static final int N_THREADS = 4;
+    private final ExecutorService cleanupExecutor = Executors.newFixedThreadPool(N_THREADS);
+
+    @PreDestroy
+    public void shutdown() {
+        cleanupExecutor.shutdown();
+    }
 
     //If there is enough items in stock then calculate else cancel the transaction
     /**
      * Lua script for atomic flash sale stock deduction.
      *
-     * Operations performed atomically:
-     * 1. Check if user already purchased (idempotency)
-     * 2. Verify stock availability
-     * 3. Deduct stock
-     * 4. Record purchase in deduction history
+     * All operations execute atomically in a single Redis round-trip:
+     * 1. Validate activity exists and is within time window
+     * 2. Check user purchase idempotency
+     * 3. Verify stock availability
+     * 4. Deduct stock
+     * 5. Record deduction history (with 24h TTL)
+     * 6. Create reservation (cleaned up by scheduled task)
+     *
+     * KEYS:
+     *   [1] seckill:stock:{productId}       - stock counter (String)
+     *   [2] product:deduction:{productId}    - purchase history (Hash)
+     *   [3] seckill:activity:{productId}    - activity config (Hash)
+     *   [4] seckill:reservation:{uuid}      - reservation data (Hash)
+     *
+     * ARGV:
+     *   [1] quantity                        - items to purchase
+     *   [2] userId                          - buyer identifier
+     *   [3] now                             - current unix timestamp (seconds)
+     *   [4] reservationTTL                  - reservation TTL (seconds, stored in reservation for scheduler use)
+     *   [5] productId                       - product identifier
      *
      * Return codes:
-     *  1: Success
-     *  0: Insufficient stock
-     * -1: Product not found
-     * -2: User already purchased (idempotent rejection)
+     *   1: Success - stock deducted, reservation created
+     *   0: Insufficient stock
+     *  -1: Product not found (activity or stock missing)
+     *  -2: User already purchased (idempotent rejection)
+     *  -3: Seckill not started
+     *  -4: Seckill ended
      */
-    String SEC_KILL_LUA_SCRIPT = """
-        local product_deduction_history = KEYS[2]
-        local exists = redis.call('hexists', product_deduction_history, ARGV[2])
-        if (exists == 1) then
-            return -2
-        end
+    private static final String SEC_KILL_LUA_SCRIPT = """
         local storageKey = KEYS[1]
-        local stockQuantity = redis.call('GET', storageKey)
-        if not stockQuantity then
-            return -1
-        end
+        local deductionHistoryKey = KEYS[2]
+        local activityKey = KEYS[3]
+        local reservationKey = KEYS[4]
         local quantity = tonumber(ARGV[1])
-        if quantity <= tonumber(stockQuantity) then
-            redis.call('DECRBY', storageKey, quantity)
-            redis.call('HSET', product_deduction_history, ARGV[2], quantity)
-            redis.call('EXPIRE', product_deduction_history, 86400)
-            return 1
-        else
-            return 0
-        end
+        local userId = ARGV[2]
+        local now = tonumber(ARGV[3])
+        local reservationTTL = tonumber(ARGV[4])
+        local productId = ARGV[5]
+        
+        local startTime = redis.call('HGET', activityKey, 'startTime')
+        if not startTime then return -1 end
+        local endTime = redis.call('HGET', activityKey, 'endTime')
+        if not endTime then return -1 end
+        local expiresAt = now + reservationTTL
+        if now < tonumber(startTime) then return -3 end
+        if now > tonumber(endTime) then return -4 end
+        
+        if redis.call('HEXISTS', deductionHistoryKey, userId) == 1 then return -2 end
+        
+        local stockQuantity = redis.call('GET', storageKey)
+        if not stockQuantity then return -1 end
+        if quantity > tonumber(stockQuantity) then return 0 end
+        
+        redis.call('DECRBY', storageKey, quantity)
+        redis.call('HSET', deductionHistoryKey, userId, quantity)
+        redis.call('EXPIRE', deductionHistoryKey, 86400)
+        redis.call('HMSET', reservationKey, 'userId', userId, 'productId', productId, 'quantity', quantity, 'expiresAt', expiresAt)
+        return 1
     """;
 
-    /**
-     * Lua script for atomic stock rollback.
-     *
-     * Used when reservation fails after stock deduction.
-     * Restores stock and removes deduction history entry.
-     *
-     * Return: [status, newStock]
-     *  status 1: Rollback successful
-     *  status -1: No deduction history found
+    /*
+        Lua script for deleting keys while confirming order
      */
-    String ROLLBACK_LUA_SCRIPT = """
-        local storageKey = KEYS[1]
-        local product_deduction_history = KEYS[2]
-        local userId = ARGV[1]
-        local quantity = redis.call('HGET', product_deduction_history, userId)
-        if not quantity then
-            return {-1, 0}
-        end
-        local newStock = redis.call('INCRBY', storageKey, tonumber(quantity))
-        redis.call('HDEL', product_deduction_history, userId)
-        return {1, newStock}
-    """;
+    private static final String CONFIRM_CLEANUP_LUA = """
+                redis.call('DEL', KEYS[1])
+                redis.call('HDEL', KEYS[2], ARGV[1])
+                return 1
+            """;
 /*
     String SEC_KILL_LUA_SCRIPT_GROUP = """
             local unavailable_products = {}
@@ -149,6 +177,9 @@ public class SecKillController {
             end
            """;*/
 
+    private static final DefaultRedisScript<Long> SECKILL_SCRIPT = new DefaultRedisScript<>(SEC_KILL_LUA_SCRIPT, Long.class);
+    private static final DefaultRedisScript<Long> CLEANUP_SCRIPT = new DefaultRedisScript<>(CONFIRM_CLEANUP_LUA, Long.class);
+
     /**
      * Retrieves all active flash sale products.
      *
@@ -165,50 +196,44 @@ public class SecKillController {
      */
     @GetMapping("/products")
     public ResponseEntity<?> getSeckillProducts() {
-        Set<String> stockKeys = redisTemplate.keys("seckill:stock:*");
-        List<Map<String, Object>> products = new ArrayList<>();
-        if (stockKeys == null || stockKeys.isEmpty()) {
-            return ResponseEntity.ok(Map.of(
-                    "success", true,
-                    "products", Collections.emptyList()
-            ));
-        }
-        for (String stockKey : stockKeys) {
-            String productId = stockKey.replace("seckill:stock:", "");
-            String stock = redisTemplate.opsForValue().get(stockKey);
-            if (stock == null) {
-                continue;
+        List<String> productIds = new ArrayList<>();
+        ScanOptions scanOptions = ScanOptions.scanOptions().match("seckill:stock:*").count(100).build();
+        try (Cursor<String> cursor = redisTemplate.scan(scanOptions)) {
+            while (cursor.hasNext()) {
+                String stockKey = cursor.next();
+                productIds.add(stockKey.replace("seckill:stock:", ""));
             }
-            Map<Object, Object> activity = redisTemplate.opsForHash().entries("seckill:activity:" + productId);
-            products.add(Map.of(
-                    "productId", productId,
-                    "stock", stock,
-                    "startTime", activity.getOrDefault("startTime", ""),
-                    "endTime", activity.getOrDefault("endTime", "")
-            ));
         }
-        return ResponseEntity.ok(Map.of("success", true, "products", products));
-    }
-
-    private ResponseEntity<SeckillResponse> createReservation(String userId, String productId, int quantity) {
+        if (productIds.isEmpty()) {
+            return ResponseEntity.ok(Map.of("success", true, "products", List.of()));
+        }
         try {
-            UUID reservationId = UUID.randomUUID();
-            long expiresAt = System.currentTimeMillis() + RESERVATION_TIMEOUT_MINUTES * 60 * 1000;
-            String reservationKey = "seckill:reservation:" + reservationId;
-            redisTemplate.opsForHash().putAll(reservationKey, Map.of(
-                    "userId", userId,
-                    "productId", productId,
-                    "quantity", String.valueOf(quantity)
-            ));
-            redisTemplate.expire(reservationKey, RESERVATION_TIMEOUT_MINUTES, TimeUnit.MINUTES);
-            return ResponseEntity.ok(
-                    new SeckillResponse(true, "Seckill Success", reservationId.toString(), expiresAt)
-            );
+            List<Object> results = redisTemplate.executePipelined((RedisCallback<Object>) connection -> {
+                for (String pid : productIds) {
+                    connection.stringCommands().get(("seckill:stock:" + pid).getBytes());
+                    connection.hashCommands().hGetAll(("seckill:activity:" + pid).getBytes());
+                }
+                return null;
+            });
+            List<Map<String, Object>> products = new ArrayList<>();
+            for (int i = 0; i < productIds.size(); i++) {
+                String stock = (String) results.get(i * 2);
+                if (stock == null) continue;
+
+                @SuppressWarnings("unchecked")
+                Map<Object, Object> activity = (Map<Object, Object>) results.get(i * 2 + 1);
+
+                products.add(Map.of(
+                        "productId", productIds.get(i),
+                        "stock", stock,
+                        "startTime", activity.getOrDefault("startTime", ""),
+                        "endTime", activity.getOrDefault("endTime", "")
+                ));
+            }
+            return ResponseEntity.ok(Map.of("success", true, "products", products));
         } catch (Exception e) {
-            log.error("Failed to create reservation for product: {}", productId, e);
-            return ResponseEntity.status(500).body(
-                    new SeckillResponse(false, "System Error", null, null)
-            );
+            log.error("Failed to fetch seckill products", e);
+            return ResponseEntity.status(500).body(Map.of("success", false, "message", "Failed to fetch products"));
         }
     }
 /**
@@ -235,124 +260,56 @@ public class SecKillController {
  */
     @PostMapping("/seckill")
     public ResponseEntity<SeckillResponse> secKill(@RequestBody SeckillRequest request, @RequestHeader("X-User-Id") String userId){
-        String activityKey = "seckill:activity:" + request.productId();
-        Map<Object, Object> activity = redisTemplate.opsForHash().entries(activityKey);
-        if (!activity.isEmpty()) {
-            final int MILLISECONDS_TO_SECONDS = 1000;
-            long now = System.currentTimeMillis() / MILLISECONDS_TO_SECONDS;
-            long startTime = Long.parseLong(activity.get("startTime").toString());
-            long endTime = Long.parseLong(activity.get("endTime").toString());
-
-            if (now < startTime) {
-                return ResponseEntity.ok(new SeckillResponse(false, "Seckill not started", null, null));
-            }
-            if (now > endTime) {
-                return ResponseEntity.ok(new SeckillResponse(false, "Seckill finished", null, null));
-            }
-        }
-        DefaultRedisScript<Long> script = new DefaultRedisScript<>(SEC_KILL_LUA_SCRIPT, Long.class);
         String stockKey = "seckill:stock:" + request.productId();
-        String productDeductionHistoryKey = "product:deduction:" + request.productId();
-        String productDeductionHistoryField = userId;
-        Long result = redisTemplate.execute(script,  Arrays.asList(stockKey, productDeductionHistoryKey), String.valueOf(request.quantity()), productDeductionHistoryField);
-        String reservationKey = null;
-        String pendingKey = null;
-        String pendingValue = null;
+        String deductionKey = "product:deduction:" + request.productId();
+        String activityKey = "seckill:activity:" + request.productId();
+        UUID reservationId = UUID.randomUUID();
+        String reservationKey = "seckill:reservation:" + reservationId;
+        long expiresAt = System.currentTimeMillis() / 1000 + RESERVATION_TIMEOUT_MINUTES * 60;
 
-        if (result != null && result == 1){
-            try {
-                log.info("Product: {} is available", request.productId());
-                UUID reservationId = UUID.randomUUID();
-                long expiresAt = System.currentTimeMillis() + RESERVATION_TIMEOUT_MINUTES * 60 * 1000;
-                reservationKey = "seckill:reservation:" + reservationId;
-                Map<String, String> reservationData = Map.of("userId", userId,
-                        "productId", request.productId(),
-                        "quantity", String.valueOf(request.quantity()));
-                redisTemplate.opsForHash().putAll(reservationKey, reservationData);
-                redisTemplate.expire(reservationKey, RESERVATION_TIMEOUT_MINUTES, TimeUnit.MINUTES);
-                pendingKey = "seckill:pending:" + request.productId() + ":" + userId;
-                pendingValue = reservationId + ":" + expiresAt + ":" + request.quantity();
-                redisTemplate.opsForList().rightPush(pendingKey, pendingValue);
-                log.info("Added to pending list: product={}, reservation={}", request.productId(), reservationId);
-                //test rollback function
-                //if (true) throw new RuntimeException("TEST ROLLBACK");
-                return ResponseEntity.ok(
-                        new SeckillResponse(true, "Seckill Success", reservationId.toString(), expiresAt)
-                );
-            } catch (Exception e) {
-                log.error("Failed to reserve seckill", e);
-                try {
-                    DefaultRedisScript<List> rollbackScript = new DefaultRedisScript<List>(ROLLBACK_LUA_SCRIPT, List.class);
-                    //redisTemplate.opsForValue().increment(stockKey, request.quantity());
-                    List<Long> rollbackResult = redisTemplate.execute(rollbackScript,  Arrays.asList(stockKey, productDeductionHistoryKey), productDeductionHistoryField);
-                    if (rollbackResult.get(0) == 1) {
-                        Long newStock = rollbackResult.get(1);
-                        log.info("Stock rolled back for product: {}, new stock: {}", request.productId(), newStock);
-                        //redisTemplate.opsForHash().delete(productDeductionHistoryKey, productDeductionHistoryField);
-                        log.info("Product deduction history changed: {}", request.productId());
-                    }
-                    else {
-                        log.info("Rollback Lua Script executed unsuccessfully");
-                    }
-                } catch (Exception e1) {
-                    log.error("Failed to rollback for product: {}", request.productId(), e1);
-                }
-                if (reservationKey != null) {
-                    try {
-                        redisTemplate.delete(reservationKey);
-                        log.info("Reservation key cleaned up: {}", reservationKey);
-                    } catch (Exception e2) {
-                        log.error("Failed to cleanup partial reservaion: {}", reservationKey);
-                    }
-                }
-                if (pendingKey != null && pendingValue != null) {
-                    try {
-                        redisTemplate.opsForList().remove(pendingKey, 1, pendingValue);
-                        log.info("Removed from pending list: {}", pendingValue);
-                    } catch (Exception pendingError) {
-                        log.error("Failed to cleanup pending list", pendingError);
-                    }
-                }
-                return ResponseEntity.status(500).body(
-                        new SeckillResponse(false, "System Error", null,null)
-                );
-            }
-        } else {
-            if (result != null && result == -2) {
-                log.info("Product already reserved: {}. One user can only reserve one product at a time in one day", request.productId());
-                return ResponseEntity.ok(
-                        new SeckillResponse(false, "Product reserved", null, null)
-                );
-            }
-            else if (result != null && result == -1) {
-                String url = productServiceUrl + "/api/products/" + request.productId() + "/stock";
-                try {
-                    Integer stock = restTemplate.getForObject(url, Integer.class);
-                    if (stock != null && stock > 0) {
-                        redisTemplate.opsForValue().set(stockKey, String.valueOf(stock));
-                        result = redisTemplate.execute(script,
-                                Arrays.asList(stockKey, productDeductionHistoryKey),
-                                String.valueOf(request.quantity()), productDeductionHistoryField);
-                        if (result != null && result == 1) {
-                            return createReservation(userId, request.productId(), request.quantity());
-                        }
-                    }
-                } catch (Exception e) {
-                    log.error("Failed to restore stock from DB", e);
-                }
+        Long result = redisTemplate.execute(SECKILL_SCRIPT,
+                Arrays.asList(stockKey, deductionKey, activityKey, reservationKey),
+                String.valueOf(request.quantity()),
+                userId,
+                String.valueOf(System.currentTimeMillis() / 1000),
+                String.valueOf(RESERVATION_TIMEOUT_MINUTES * 60),
+                request.productId()
+        );
 
-                log.info("Can't find stock for this product: {}", request.productId());
-                return ResponseEntity.ok(
-                        new SeckillResponse(false, "Cannot find product", null, null)
-                );
-            }
-            else {
-                log.info("Stock deduction failed for product: {}", request.productId());
-                return ResponseEntity.ok(
-                        new SeckillResponse(false, "Seckill Failure", null, null)
-                );
-            }
+        if (result == null) {
+            return ResponseEntity.status(500).body(
+                    new SeckillResponse(false, "Redis error", null, null));
         }
+
+        return switch (result.intValue()) {
+            case 1 -> {
+                log.info("Seckill success: product={}, user={}, reservation={}",
+                        request.productId(), userId, reservationId);
+                yield ResponseEntity.ok(
+                        new SeckillResponse(true, "Seckill Success", reservationId.toString(), expiresAt));
+            }
+            case 0 -> {
+                log.info("Insufficient stock: product={}", request.productId());
+                yield ResponseEntity.ok(
+                        new SeckillResponse(false, "Insufficient stock", null, null));
+            }
+            case -1 -> {
+                log.info("Product not found in seckill: product={}", request.productId());
+                yield ResponseEntity.ok(
+                        new SeckillResponse(false, "Not a seckill product", null, null));
+            }
+            case -2 -> {
+                log.info("One user can only reserve one product at a time in one day. Already purchased: product={}, user={}", request.productId(), userId);
+                yield ResponseEntity.ok(
+                        new SeckillResponse(false, "Already purchased. ", null, null));
+            }
+            case -3 -> ResponseEntity.ok(
+                    new SeckillResponse(false, "Seckill not started", null, null));
+            case -4 -> ResponseEntity.ok(
+                    new SeckillResponse(false, "Seckill finished", null, null));
+            default -> ResponseEntity.status(500).body(
+                    new SeckillResponse(false, "Unknown error", null, null));
+        };
     }
 
 
@@ -383,12 +340,16 @@ public class SecKillController {
         String reservationKey = "seckill:reservation:" + request.reservationId();
         String address = request.address();
         String paymentMethod = request.paymentMethod();
-        //Check if reservationId exists
-        if (!Boolean.TRUE.equals(redisTemplate.hasKey(reservationKey))) {
-            return ResponseEntity.badRequest().body(Map.of("success", false, "message", "Reservation Id doenst exist"));
-        }
         //Check reservation Data
         Map<Object, Object> reservationData = redisTemplate.opsForHash().entries(reservationKey);
+        //Check if reservationId exists
+        if (reservationData.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("success", false, "message", "Reservation not found"));
+        }
+        long expiresAt = Long.parseLong(reservationData.get("expiresAt").toString());
+        if (System.currentTimeMillis() / 1000 > expiresAt) {
+            return ResponseEntity.badRequest().body(Map.of("success", false, "message", "Reservation expired"));
+        }
         String reservedUserId = reservationData.get("userId").toString();
         String productId = reservationData.get("productId").toString();
         String quantity = reservationData.get("quantity").toString();
@@ -408,38 +369,32 @@ public class SecKillController {
             log.info("Confirmed order for product: {}", productId);
 
             SeckillConfirmedEvent secEvent = new SeckillConfirmedEvent(request.reservationId(), userId, productId, Integer.parseInt(quantity), System.currentTimeMillis(), address, paymentMethod, buyerName, buyerPhone);
-            kafkaTemplate.send("seckill-events", secEvent);
-            log.info("[KAFKA] Sent SeckillConfirmedEvent: {}", request.reservationId());
-
-            //delete keys
-            redisTemplate.delete(reservationKey);
-            log.info("Reservation {} deleted", reservationKey);
-
-            //delete pending key
-            String pendingKey = "seckill:pending:" + productId + ":" + userId;
-            List<String> pendingList = redisTemplate.opsForList().range(pendingKey, 0, -1);
-
             try {
-                String productDeductionHistoryKey = "product:deduction:" + productId;
-                String productDeductionHistoryField = userId;
-                redisTemplate.opsForHash().delete(productDeductionHistoryKey, productDeductionHistoryField);
-            } catch (Exception e) {
-                log.error("Failed to delete product deduction history: {}", productId, e);
-            }
-
-            if (pendingList != null) {
-                for (String pending : pendingList) {
-                    if (pending.startsWith(request.reservationId() + ":")) {
-                        redisTemplate.opsForList().remove(pendingKey, 1, pending);
-                        log.info("Removed from pending list: {}", pending);
-                        break;
+                kafkaTemplate.send("seckill-events", productId, secEvent).whenComplete((result, ex) -> {
+                    if (ex != null) {
+                        log.error("[SECKILL] Kafka send failed for {}: {}",
+                                request.reservationId(), ex.getMessage());
                     }
-                }
+                    else {
+                        cleanupExecutor.submit(() -> {
+                            log.info("[KAFKA] Sent SeckillConfirmedEvent: {}", request.reservationId());
+
+                            //delete keys — only reached if Kafka send confirmed
+                            String deductionKey = "product:deduction:" + productId;
+                            redisTemplate.execute(CLEANUP_SCRIPT,
+                                    Arrays.asList(reservationKey, deductionKey), userId);
+                            log.info("Reservation {} deleted", reservationKey);
+                        });
+                    }
+                });
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to send seckill event: " + e.getMessage(), e);
             }
 
             return ResponseEntity.ok(Map.of(
                     "success", true,
                     "reservationId", request.reservationId(),
+
                     "message", "Seckill confirmed, order is being processed"
             ));
 

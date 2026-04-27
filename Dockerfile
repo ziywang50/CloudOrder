@@ -28,6 +28,7 @@ RUN apk add --no-cache curl
 
 COPY --from=build /workspace/app.jar /app/app.jar
 COPY config/rsa.pub /app/config/rsa.pub
+COPY config/rsa.pri /app/config/rsa.pri
 
 ENV JAVA_OPTS=""
 

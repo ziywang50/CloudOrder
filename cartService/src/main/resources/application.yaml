@@ -9,5 +9,23 @@ spring:
 server:
   port: 8083
 
+management:
+  tracing:
+    enabled: false
+
 jwt:
   publicKeyPath: ${JWT_PUBLIC_KEY_PATH:./config/rsa.pub}
+
+---
+spring:
+  config:
+    activate:
+      on-profile: prod
+management:
+  tracing:
+    enabled: true
+    sampling:
+      probability: 1.0
+  otlp:
+    tracing:
+      endpoint: http://jaeger.cloudorder.local:4318/v1/traces

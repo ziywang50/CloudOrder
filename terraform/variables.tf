@@ -1,6 +1,6 @@
 variable "aws_region" {
   type    = string
-  default = "us-west-1"
+  default = "us-west-2"
 }
 
 variable "project_name" {
@@ -36,7 +36,7 @@ variable "db_password" {
 
 variable "db_instance_class" {
   type    = string
-  default = "db.t3.medium"
+  default = "db.t3.small"
 }
 
 variable "admin_secret_key" {
@@ -46,17 +46,17 @@ variable "admin_secret_key" {
 
 variable "redis_node_type" {
   type    = string
-  default = "cache.m5.large"
+  default = "cache.t3.medium"
 }
 
 variable "opensearch_instance_type" {
   type    = string
-  default = "m5.large.search"
+  default = "t3.small.search"
 }
 
 variable "msk_instance_type" {
   type    = string
-  default = "kafka.m5.large"
+  default = "kafka.t3.small"
 }
 
 variable "jwt_private_key" {

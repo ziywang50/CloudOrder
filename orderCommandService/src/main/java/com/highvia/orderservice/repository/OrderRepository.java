@@ -16,6 +16,7 @@ public interface OrderRepository extends JpaRepository<OrderEntity, String> {
     @Query("SELECT o FROM OrderEntity o WHERE o.userId = :userId ORDER BY o.createdAt DESC")
     List<OrderEntity> findByUserIdWithItems(@Param("userId") Long userId);
 
+    Optional<OrderEntity> findByIdempotencyKey(String idempotencyKey);
     List<OrderEntity> findByStatus(String status);
     Optional<OrderEntity> findByOrderIdAndUserId(String orderId, Long userId);
     List<OrderEntity> findByUserIdOrderByCreatedAtDesc(Long userId);

@@ -6,6 +6,7 @@ import com.amazonaws.services.dynamodbv2.datamodeling.DynamoDBScanExpression;
 import com.amazonaws.services.dynamodbv2.model.*;
 import com.highvia.productservice.document.ProductDocument;
 import com.highvia.productservice.entity.ProductEntity;
+import com.highvia.common.events.StockUpdatedEvent;
 import com.highvia.productservice.events.ProductCreatedEvent;
 import com.highvia.productservice.repository.ProductElasticsearchRepository;
 import lombok.RequiredArgsConstructor;
@@ -49,9 +50,7 @@ public class ProductService {
                     .withAttributeDefinitions(
                             new AttributeDefinition("productId", ScalarAttributeType.N)
                     )
-                    .withProvisionedThroughput(
-                            new ProvisionedThroughput(5L, 5L)
-                    );
+                    .withBillingMode(BillingMode.PAY_PER_REQUEST);
 
             amazonDynamoDB.createTable(request);
             System.out.println(" DynamoDB table created: Products");
@@ -98,6 +97,8 @@ public class ProductService {
                 syncToElasticsearch(product); //sync to ES
 
                 log.info("Stock added: product={}, +{}", productId, quantity);
+                kafkaTemplate.send("stock-updated", String.valueOf(productId),
+                        new StockUpdatedEvent(productId, product.getStock(), System.currentTimeMillis()));
                 return true;
             } catch (ConditionalCheckFailedException e) {
                 log.warn("Version conflict on addStock, retry {}/{}", i + 1, maxRetries);
@@ -139,6 +140,8 @@ public class ProductService {
 
                 log.info("Stock deducted: product={}, quantity={}, remaining={}",
                         productId, quantity, product.getStock());
+                kafkaTemplate.send("stock-updated", String.valueOf(productId),
+                        new StockUpdatedEvent(productId, product.getStock(), System.currentTimeMillis()));
                 return true;
 
             } catch (ConditionalCheckFailedException e) {

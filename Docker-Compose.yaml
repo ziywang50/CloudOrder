@@ -8,10 +8,14 @@ services:
     container_name: dynamodb-local
     ports:
       - "8003:8000"
-    command: "-jar DynamoDBLocal.jar -sharedDb -inMemory"
+    command: "-jar DynamoDBLocal.jar -sharedDb -dbPath /home/dynamodblocal/data"
+    user: root
+    volumes:
+      - dynamodb-data:/home/dynamodblocal/data
+    working_dir: /home/dynamodblocal
 
   db:
-    image: postgres:15.2-alpine
+    image: postgres:16
     container_name: postgres-local
     environment:
       POSTGRES_DB: customerdb
@@ -23,7 +27,7 @@ services:
       - "5435:5432"
 
   db-order:
-    image: postgres:15.2-alpine
+    image: postgres:16
     container_name: postgres-order
     environment:
       POSTGRES_DB: order_write_db
@@ -100,7 +104,7 @@ services:
 
   # Read database
   db-order-read:
-    image: postgres:15.2-alpine
+    image: postgres:16
     container_name: postgres-order-read
     environment:
       POSTGRES_DB: order_read_db
@@ -113,6 +117,7 @@ services:
       - "5439:5432"
 
 volumes:
+  dynamodb-data:
   orderservice-pg-local:
   orderservice-pg-read-local:
   customerservice-pg-local:

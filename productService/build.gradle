@@ -37,8 +37,12 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-data-elasticsearch'
 	// Kafka
 	implementation 'org.springframework.kafka:spring-kafka'
+	// Redis
+	implementation 'org.springframework.boot:spring-boot-starter-data-redis'
 	//common module
 	implementation project(':common')
+	implementation 'io.micrometer:micrometer-tracing-bridge-otel'
+	implementation 'io.opentelemetry:opentelemetry-exporter-otlp'
 }
 
 dependencyManagement {

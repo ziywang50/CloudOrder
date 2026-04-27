@@ -20,6 +20,9 @@ public class KafkaConfig {
     @Value("${spring.kafka.bootstrap-servers:localhost:9092}")
     private String bootstrapServers;
 
+    @Value("${kafka.replication-factor:1}")
+    private int replicationFactor;
+
     @Bean
     public ConsumerFactory<String, Object> consumerFactory() {
         Map<String, Object> config = new HashMap<>();
@@ -29,7 +32,7 @@ public class KafkaConfig {
         config.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, JsonDeserializer.class);
         config.put(JsonDeserializer.TRUSTED_PACKAGES, "*");
         config.put(JsonDeserializer.USE_TYPE_INFO_HEADERS, true);
-        config.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest");
+        config.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
         return new DefaultKafkaConsumerFactory<>(config);
     }
 
@@ -38,16 +41,47 @@ public class KafkaConfig {
         ConcurrentKafkaListenerContainerFactory<String, Object> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(consumerFactory());
-        factory.setConcurrency(3);
+        factory.setConcurrency(1);
         return factory;
     }
 
     @Bean
-    public NewTopic orderEventsTopic() {
-        return TopicBuilder.name("order-events")
+    public NewTopic orderEventsRetryTopic0() {
+        return TopicBuilder.name("order-events-retry")
                 .partitions(6)
-                .replicas(3)
+                .replicas(replicationFactor)
                 .build();
     }
 
+    @Bean
+    public NewTopic orderEventsRetryTopic1() {
+        return TopicBuilder.name("order-events-retry-1000")
+                .partitions(6)
+                .replicas(replicationFactor)
+                .build();
+    }
+
+    @Bean
+    public NewTopic orderEventsRetryTopic2() {
+        return TopicBuilder.name("order-events-retry-2000")
+                .partitions(6)
+                .replicas(replicationFactor)
+                .build();
+    }
+
+    @Bean
+    public NewTopic orderEventsRetryTopic3() {
+        return TopicBuilder.name("order-events-retry-4000")
+                .partitions(6)
+                .replicas(replicationFactor)
+                .build();
+    }
+
+    @Bean
+    public NewTopic orderEventsDltTopic() {
+        return TopicBuilder.name("order-events-dlt")
+                .partitions(6)
+                .replicas(replicationFactor)
+                .build();
+    }
 }

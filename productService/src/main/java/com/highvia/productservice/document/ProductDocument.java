@@ -32,4 +32,5 @@ public class ProductDocument {
 
     @Field(type = FieldType.Integer)
     private Integer stock;
+
 }

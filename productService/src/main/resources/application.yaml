@@ -6,20 +6,28 @@ spring:
     name: product-service
   elasticsearch:
     uris: ${ELASTICSEARCH_URL:http://localhost:9200}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6380}
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
       properties:
-        spring.json.add.type.headers: false
+        spring.json.add.type.headers: true
     consumer:
       group-id: product-query-service
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
       properties:
         spring.json.trusted.packages: "*"
-
+        fetch.min.bytes: 1024
+        fetch.max.wait.ms: 500
+        max.poll.records: 50
+kafka:
+  replication-factor: 1
 
 amazon:
   dynamodb:
@@ -35,6 +43,10 @@ eureka:
     prefer-ip-address: true
     instance-id: ${spring.application.name}:${server.port}
 
+management:
+  tracing:
+    enabled: false
+
 jwt:
   publicKeyPath: ${JWT_PUBLIC_KEY_PATH:./config/rsa.pub}
 
@@ -43,9 +55,24 @@ spring:
   config:
     activate:
       on-profile: prod
-
 eureka:
   client:
     enabled: false
     register-with-eureka: false
     fetch-registry: false
+
+kafka:
+  replication-factor: 3
+
+management:
+  health:
+    elasticsearch:
+      enabled: false
+  tracing:
+    enabled: true
+    sampling:
+      probability: 1.0
+    otlp:
+      tracing:
+        endpoint: http://jaeger.cloudorder.local:4318/v1/traces
+

@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.http.ResponseEntity;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -14,6 +15,8 @@ import org.springframework.web.client.RestTemplate;
 
 import java.time.Instant;
 import java.util.*;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
 
 /**
  * Admin Controller for Flash Sale (Seckill) Management
@@ -36,7 +39,8 @@ public class SecKillAdminController {
     @Value("${services.product.url}")
     private String productServiceUrl;
 
-    private final int INTERVAL_SECONDS = 300000;
+    // Safety-net reconciliation interval: 30 minutes (event-driven sync handles real-time updates)
+    private static final int RECONCILIATION_INTERVAL_MS = 1800000;
 
     /**
      * Retrieves product information from ProductService.
@@ -119,6 +123,11 @@ public class SecKillAdminController {
         Integer stock = request.stock();
         String stockKey = "seckill:stock:" + productId;
         String activityKey = "seckill:activity:" + productId;
+        String SET_PRODUCT_LUA = """
+                redis.call('SET', KEYS[1], ARGV[1])
+                redis.call("HMSET", KEYS[2], 'startTime', ARGV[2], 'endTime', ARGV[3])
+                return 1
+                """;
         long startTime, endTime;
         try {
             startTime = parseTime(request.startTime());
@@ -130,11 +139,13 @@ public class SecKillAdminController {
                     "message", "Invalid time format: " + e.getMessage() + ". Use seconds (10 digits) or ISO 8601"
             ));
         }
-        redisTemplate.opsForValue().set(stockKey, String.valueOf(stock));
-        redisTemplate.opsForHash().putAll(activityKey, Map.of(
-                "startTime", String.valueOf(startTime), "endTime", String.valueOf(endTime)
-        ));
-        log.info("Set seckill product: productId={}, stock={}", productId, stock);
+        redisTemplate.execute(
+                new DefaultRedisScript<>(SET_PRODUCT_LUA, Long.class),
+                Arrays.asList(stockKey, activityKey),
+                String.valueOf(request.stock()),
+                String.valueOf(startTime),
+                String.valueOf(endTime)
+        );
 
         return ResponseEntity.ok(Map.of(
                 "success", true,
@@ -144,25 +155,43 @@ public class SecKillAdminController {
         ));
     }
 
-    @Scheduled(fixedRate = INTERVAL_SECONDS) //every 5 minutes
-    public void syncStockFromDB() {
-        Set<String> stockKeys = redisTemplate.keys("seckill:stock:*");
-        if (stockKeys == null) return;
+    private static final String SYNC_STOCK_LUA = """
+        local stockKey = KEYS[1]
+        local dbStock = tonumber(ARGV[1])
+        local current = redis.call('GET', stockKey)
+        if not current then return -1 end
+        local currentStock = tonumber(current)
+        if dbStock < currentStock then
+            local delta = currentStock - dbStock
+            redis.call('DECRBY', stockKey, delta)
+            return 1
+        end
+        return 0
+    """;
 
-        for (String stockKey : stockKeys) {
-            String productId = stockKey.replace("seckill:stock:", "");
-            String url = productServiceUrl + "/api/products/" + productId + "/stock";
-            try {
-                Integer stock = restTemplate.getForObject(url, Integer.class);
-                if (stock != null) {
-                    String current = redisTemplate.opsForValue().get(stockKey);
-                    if (stock < Integer.parseInt(current)) {
-                        redisTemplate.opsForValue().set(stockKey, String.valueOf(stock));
-                        log.info("Synced stock for product {}: {}", productId, stock);
+    private static final DefaultRedisScript<Long> SYNC_SCRIPT = new DefaultRedisScript<>(SYNC_STOCK_LUA, Long.class);
+
+    @Scheduled(fixedRate = RECONCILIATION_INTERVAL_MS)
+    public void syncStockFromDB() {
+        ScanOptions scanOptions = ScanOptions.scanOptions().match("seckill:stock:*").count(100).build();
+        try (Cursor<String> cursor = redisTemplate.scan(scanOptions)) {
+            while (cursor.hasNext()) {
+                String stockKey = cursor.next();
+                String productId = stockKey.replace("seckill:stock:", "");
+                String url = productServiceUrl + "/api/products/" + productId + "/stock";
+                try {
+                    Integer stock = restTemplate.getForObject(url, Integer.class);
+                    if (stock != null) {
+                        Long result = redisTemplate.execute(SYNC_SCRIPT,
+                                List.of(stockKey),
+                                String.valueOf(stock));
+                        if (result != null && result == 1) {
+                            log.info("Reconciled stock for product {}: adjusted to {}", productId, stock);
+                        }
                     }
+                } catch (Exception e) {
+                    log.error("Failed to sync stock for product {}", productId, e);
                 }
-            } catch (Exception e) {
-                log.error("Failed to sync stock for product {}", productId, e);
             }
         }
     }

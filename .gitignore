@@ -57,6 +57,8 @@ docker-compose.override.yml
 locust_tests/*.html
 locust_tests/*.csv
 locust_tests/error_log.json
+locust_tests/*.png
+locust_tests/*.jpg
 
 # 临时文件
 *.tmp
@@ -67,3 +69,5 @@ locust_tests/error_log.json
 
 #deploy
 deploy.ps1
+KNOWN_ISSUES.md
+.env

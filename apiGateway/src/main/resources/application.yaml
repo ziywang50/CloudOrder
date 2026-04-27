@@ -27,9 +27,57 @@ spring:
               uri: ${SECKILL_SERVICE_URL:http://localhost:8084}
               predicates:
                 - Path=/api/admin/seckill/**
+            - id: order-command-service
+              uri: ${ORDER_COMMAND_SERVICE_URL:http://localhost:8090}
+              predicates:
+                - Path=/api/orders/**
+                - Method=POST,PUT,DELETE,PATCH
+            - id: order-query-service
+              uri: ${ORDER_QUERY_SERVICE_URL:http://localhost:8091}
+              predicates:
+                - Path=/api/orders/**
+                - Method=GET
+            - id: product-service
+              uri: ${PRODUCT_SERVICE_URL:http://localhost:8089}
+              predicates:
+                - Path=/api/products/**
+            - id: cart-service
+              uri: ${CART_SERVICE_URL:http://localhost:8083}
+              predicates:
+                - Path=/api/cart/**
+            - id: customer-service-actuator
+              uri: ${CUSTOMER_SERVICE_URL:http://localhost:8088}
+              predicates:
+                - Path=/api/debug/customer/actuator/**
+              filters:
+                - StripPrefix=3
+          httpclient:
+            pool:
+              max-connections: 2000
+              acquire-timeout: 8000
+            connect-timeout: 5000
+            response-timeout: 120s
 rate-limit:
-  max-requests: 10
+  max-requests: 1000
   window-seconds: 60
+
+management:
+  tracing:
+    enabled: false
 
 jwt:
   publicKeyPath: ./config/rsa.pub
+
+---
+spring:
+  config:
+    activate:
+      on-profile: prod
+management:
+  tracing:
+    enabled: true
+    sampling:
+      probability: 1.0
+  otlp:
+    tracing:
+      endpoint: http://jaeger.cloudorder.local:4318/v1/traces

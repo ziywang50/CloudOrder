@@ -8,8 +8,10 @@ import com.highvia.customerservice.Dto.LoginRequest;
 import com.highvia.customerservice.Dto.RegisterDto;
 import com.highvia.customerservice.Entity.CustomerEntity;
 import com.highvia.customerservice.Repository.CustomerRepository;
+import jakarta.annotation.PostConstruct;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletResponse;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
@@ -18,6 +20,7 @@ import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.util.Map;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/auth")
 public class AuthController {
@@ -26,6 +29,9 @@ public class AuthController {
     private final String privateKeyPath;
     private final String publicKeyPath;
     private final String adminSecretKey;
+
+    private PrivateKey privateKey;
+    private PublicKey publicKey;
 
     // Constructor injection
     public AuthController(
@@ -39,6 +45,12 @@ public class AuthController {
         this.privateKeyPath = privateKeyPath;
         this.publicKeyPath = publicKeyPath;
         this.adminSecretKey = adminSecretKey;
+    }
+
+    @PostConstruct
+    public void init() throws Exception {
+        this.privateKey = RsaUtils.getPrivateKey(privateKeyPath);
+        this.publicKey = RsaUtils.getPublicKey(publicKeyPath);
     }
 
     @PostMapping("/signup")
@@ -60,7 +72,6 @@ public class AuthController {
         customerRepository.save(customer);
 
         // 3. Generate JWT token
-        PrivateKey privateKey = RsaUtils.getPrivateKey(privateKeyPath);
         UserInfo userInfo = new UserInfo(
                 customer.getId(),
                 customer.getEmail(),
@@ -107,7 +118,6 @@ public class AuthController {
         customerRepository.save(customer);
 
         // 3. Generate JWT token
-        PrivateKey privateKey = RsaUtils.getPrivateKey(privateKeyPath);
         UserInfo userInfo = new UserInfo(
                 customer.getId(),
                 customer.getEmail(),
@@ -132,13 +142,18 @@ public class AuthController {
     public Result login(@RequestBody LoginRequest request,
                         HttpServletResponse response) throws Exception {
         //find customer my email
+        long t0 = System.currentTimeMillis();
         CustomerEntity customer = customerRepository.findByEmail(request.email())
-                .orElseThrow(() -> new RuntimeException("User not found"));;
+                .orElseThrow(() -> new RuntimeException("User not found"));
+        log.info("DB time: {}", System.currentTimeMillis() - t0);
+
+        long t1 = System.currentTimeMillis();
         if (!passwordEncoder.matches(request.password(), customer.getPassword())) {
             throw new RuntimeException("Invalid password");
         }
-        //create jwt token
-        PrivateKey privateKey = RsaUtils.getPrivateKey(privateKeyPath);
+        log.info("bcrypt time: {}", System.currentTimeMillis() - t1);
+
+        long t2 = System.currentTimeMillis();
         UserInfo userInfo = new UserInfo(
                 customer.getId(),
                 customer.getEmail(),
@@ -150,6 +165,7 @@ public class AuthController {
         //generate refresh token
         String refreshToken = JwtUtils.generateToken(userInfo, privateKey, 10080);  //7 days
 
+        log.info("jwt time: {}", System.currentTimeMillis() - t2);
         // 4. Set cookie
         response.addCookie(createCookie("CS_TOKEN", accessToken, 1800));
         response.addCookie(createCookie("CS_REFRESH_TOKEN", refreshToken, 604800));
@@ -162,12 +178,7 @@ public class AuthController {
     @PostMapping("/refresh")
     public Result refresh(@CookieValue("CS_REFRESH_TOKEN") String refreshToken,
                           HttpServletResponse response) throws Exception {
-        // Check refresh token
-        PublicKey publicKey = RsaUtils.getPublicKey(publicKeyPath);
         UserInfo userInfo = JwtUtils.getInfoFromToken(refreshToken, publicKey);
-
-        // Generate new access token
-        PrivateKey privateKey = RsaUtils.getPrivateKey(privateKeyPath);
         String newAccessToken = JwtUtils.generateToken(userInfo, privateKey, 30);
 
         response.addCookie(createCookie("CS_TOKEN", newAccessToken, 1800));

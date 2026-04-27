@@ -30,6 +30,7 @@ spring:
     hibernate:
       ddl-auto: update
     show-sql: false
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
     properties:
       hibernate:
         format_sql: true
@@ -39,14 +40,24 @@ spring:
       port: ${REDIS_PORT:6380}
       host: ${REDIS_HOST:localhost}
 
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+kafka:
+  replication-factor: 1
+
 eureka:
   client:
     service-url:
       defaultZone: ${EUREKA_URI:http://localhost:8761/eureka}
 
+management:
+  tracing:
+    enabled: false
+
 logging:
   level:
-    com.highvia.orderservice.client.ProductClient: INFO
+    com.highvia.orderqueryservice: INFO
 
 ---
 spring:
@@ -54,8 +65,21 @@ spring:
     activate:
       on-profile: prod
 
+kafka:
+  replication-factor: 3
+
 eureka:
   client:
     enabled: false
     register-with-eureka: false
     fetch-registry: false
+
+management:
+  tracing:
+    enabled: true
+    sampling:
+      probability: 1.0
+  otlp:
+    tracing:
+      endpoint: http://jaeger.cloudorder.local:4318/v1/traces
+

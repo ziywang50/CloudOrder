@@ -14,12 +14,16 @@ spring:
     username: ${DATABASE_USERNAME:postgres}
     password: ${DATABASE_PASSWORD:secret}
     driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 50
+      minimum-idle: 20
+      connection-timeout: 30000
 
   jpa:
     open-in-view: false
     hibernate:
       ddl-auto: ${DDL_AUTO:update}
-    show-sql: true
+    show-sql: false
     properties:
       hibernate:
         format_sql: true
@@ -38,12 +42,14 @@ spring:
     caffeine:
       spec: maximumSize=500,expireAfterWrite=10m
 
+management:
+  tracing:
+    enabled: false
+
 logging:
   level:
-    org.apache.coyote.http11.Http11InputBuffer: TRACE
-    org.springframework.jdbc.core: DEBUG
-    org.hibernate.SQL: DEBUG
-    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+    root: WARN
+    com.highvia.customerservice: INFO
 
 eureka:
   client:
@@ -73,3 +79,15 @@ eureka:
     enabled: false
     register-with-eureka: false
     fetch-registry: false
+management:
+  tracing:
+    enabled: true
+    sampling:
+      probability: 1.0
+  otlp:
+    tracing:
+      endpoint: http://jaeger.cloudorder.local:4318/v1/traces
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics

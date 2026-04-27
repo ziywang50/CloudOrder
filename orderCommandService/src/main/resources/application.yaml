@@ -19,12 +19,17 @@ spring:
       ddl-auto: update
     show-sql: false
 
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6380}
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
-
+kafka:
+  replication-factor: 1
 eureka:
   client:
     enabled: true
@@ -48,14 +53,30 @@ services:
   product:
     url: ${PRODUCT_SERVICE_URL:http://localhost:8089}
 
+management:
+  tracing:
+    enabled: false
+
 ---
+
 spring:
   config:
     activate:
       on-profile: prod
-
 eureka:
   client:
     enabled: false
     register-with-eureka: false
     fetch-registry: false
+
+kafka:
+  replication-factor: 3
+
+management:
+  tracing:
+    enabled: true
+    sampling:
+      probability: 1.0
+  otlp:
+    tracing:
+      endpoint: http://jaeger.cloudorder.local:4318/v1/traces

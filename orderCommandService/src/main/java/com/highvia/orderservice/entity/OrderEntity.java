@@ -33,6 +33,12 @@ public class OrderEntity {
     private String transactionId;
     //timestamp
     //shipping information
+    @Version
+    private Long version;
+
+    @Column(unique = true)
+    private String idempotencyKey;
+
     @Column(nullable = false, length = 50)
     private String buyerName;
     @Column(nullable = false, length = 20)

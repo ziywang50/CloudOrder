@@ -6,7 +6,6 @@ import com.highvia.orderservice.entity.OrderItem;
 import com.highvia.common.events.*;
 import com.highvia.orderservice.repository.OrderRepository;
 import jakarta.servlet.http.HttpServletRequest;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
@@ -14,16 +13,20 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.kafka.annotation.KafkaListener;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+
 import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 
@@ -31,7 +34,7 @@ import java.util.stream.Collectors;
 @Slf4j
 public class OrderService {
     private final OrderRepository orderRepository;
-    private final KafkaTemplate<String, Object> kafkaTemplate;
+    private final OutboxService outboxService;
     private final RestTemplate restTemplate;
     @Value("${services.cart.url}")
     private String cartServiceUrl;
@@ -40,16 +43,25 @@ public class OrderService {
     private String productServiceUrl;
 
     public OrderService(OrderRepository orderRepository,
-                        KafkaTemplate<String, Object> kafkaTemplate,
+                        OutboxService outboxService,
                         RestTemplate restTemplate) {
         this.orderRepository = orderRepository;
-        this.kafkaTemplate = kafkaTemplate;
+        this.outboxService = outboxService;
         this.restTemplate = restTemplate;
     }
 
     @Transactional
     public OrderResponse createOrder(Long userId, OrderRequest request) {
         log.info("[SAGA START] Creating order for user: {}", userId);
+
+        // Idempotency check: return existing order if same key was already processed
+        if (request.idempotencyKey() != null) {
+            Optional<OrderEntity> existing = orderRepository.findByIdempotencyKey(request.idempotencyKey());
+            if (existing.isPresent()) {
+                log.info("[IDEMPOTENCY] Duplicate request detected for key: {}", request.idempotencyKey());
+                return convertToResponse(existing.get());
+            }
+        }
 
         // 1 Get cart from CartService
         List<CartItemDTO> cartItems = getCartItems(userId);
@@ -65,6 +77,7 @@ public class OrderService {
         order.setBuyerName(request.buyerName());
         order.setBuyerPhone(request.buyerPhone());
         order.setBuyerAddress(request.buyerAddress());
+        order.setIdempotencyKey(request.idempotencyKey());
 
         // 3 Create each cartItem inside cart
         for (CartItemDTO cartItem : cartItems) {
@@ -96,7 +109,7 @@ public class OrderService {
         log.info("Event class: {}", event.getClass().getName());
         log.info("Event content: {}", event);*/
 
-        kafkaTemplate.send("order-events", event);
+        outboxService.save("order-events", savedOrder.getOrderId(), event);
         StockDeductionRequest reservationEvent = new StockDeductionRequest(
                 savedOrder.getOrderId(),
                 //savedOrder.getUserId(),
@@ -105,7 +118,7 @@ public class OrderService {
                 )).collect(Collectors.toList())
         );
 
-        kafkaTemplate.send("stock-deduction-requests", reservationEvent);
+        outboxService.save("stock-deduction-requests", savedOrder.getOrderId(), reservationEvent);
         log.info(" [SAGA EVENT] Stock deduction requested: orderId={}", savedOrder.getOrderId());
 
         // 6. Clear cart: Don't clear now, wait until confirmation
@@ -166,74 +179,82 @@ public class OrderService {
     @Transactional
     public void cancelOrder(String orderId, String reason) {
         log.warn("[SAGA] Cancelling order: {}, reason {}", orderId, reason);
-        OrderEntity order = orderRepository.findById(orderId).orElseThrow(() -> new RuntimeException("Order not found: " + orderId));
-        if (!"PENDING".equals(order.getStatus())) {
-            log.warn("Order {} is not PENDING, current status: {}",
-                    orderId, order.getStatus());
-            return;
+        try {
+            OrderEntity order = orderRepository.findById(orderId).orElseThrow(() -> new RuntimeException("Order not found: " + orderId));
+            if (!"PENDING".equals(order.getStatus())) {
+                log.warn("Order {} is not PENDING, current status: {}",
+                        orderId, order.getStatus());
+                return;
+            }
+            order.setStatus("CANCELLED");
+            orderRepository.save(order);
+
+            // Send Order cancelled event
+            OrderCancelledEvent event = new OrderCancelledEvent(
+                    orderId,
+                    LocalDateTime.now()
+            );
+            outboxService.save("order-events", orderId, event);
+
+            log.info("Order cancelled event sent: orderId={}", orderId);
+        } catch (ObjectOptimisticLockingFailureException e) {
+            log.warn("[OPTIMISTIC LOCK] Concurrent modification on cancelOrder for orderId={}, skipping", orderId);
         }
-        order.setStatus("CANCELLED");
-        orderRepository.save(order);
-
-        // Send Order cancelled event
-        OrderCancelledEvent event = new OrderCancelledEvent(
-                orderId,
-                LocalDateTime.now()
-        );
-        kafkaTemplate.send("order-events", event);
-
-        log.info("Order cancelled event sent: orderId={}", orderId);
     }
 
     //continue when stock reduction succeeded
     @Transactional
     public void confirmOrder(String orderId) {
         log.info("[SAGA SUCCESS] Confirming Order: {}", orderId);
-
-        OrderEntity order = orderRepository.findById(orderId)
-                .orElseThrow(() -> new RuntimeException("Order not found:" + orderId));
-
-        if (!"PENDING".equals(order.getStatus())) {
-            log.warn("Order {} is not PENDING, current status: {}", orderId, order.getStatus());
-            return;
-        }
-
-        order.setStatus("CONFIRMED");
-        orderRepository.save(order);
-        log.info("✅ Step 1: Database updated for {}", orderId);
-
-        // Step 2: 构造event
-        OrderConfirmedEvent event;
         try {
-            event = new OrderConfirmedEvent(
-                    orderId,
-                    LocalDateTime.now()
-            );
-            log.info("✅ Step 2: Event constructed for {}", orderId);
-        } catch (Exception e) {
-            log.error("❌ Failed to construct event for {}: {}", orderId, e.getMessage(), e);
-            throw e;
-        }
+            OrderEntity order = orderRepository.findById(orderId)
+                    .orElseThrow(() -> new RuntimeException("Order not found:" + orderId));
 
-        // Step 3: 发送event
-        try {
-            kafkaTemplate.send("order-events", event);
-            log.info("✅ Step 3: Event sent for {}", orderId);
-        } catch (Exception e) {
-            log.error("❌ Failed to send event for {}: {}", orderId, e.getMessage(), e);
-            throw e;
-        }
+            if (!"PENDING".equals(order.getStatus())) {
+                log.warn("Order {} is not PENDING, current status: {}", orderId, order.getStatus());
+                return;
+            }
 
-        // Step 4: 清理cart
-        try {
-            clearCart(order.getUserId());
-            log.info("✅ Step 4: Cart cleared for {}", orderId);
-        } catch (Exception e) {
-            log.error("❌ Failed to clear cart for {}: {}", orderId, e.getMessage(), e);
-            // 不抛出，clearCart失败不应该影响订单确认
-        }
+            order.setStatus("CONFIRMED");
+            orderRepository.save(order);
+            log.info("✅ Step 1: Database updated for {}", orderId);
 
-        log.info("✅ confirmOrder完成: {}", orderId);
+            // Step 2: construct event
+            OrderConfirmedEvent event;
+            try {
+                event = new OrderConfirmedEvent(
+                        orderId,
+                        LocalDateTime.now()
+                );
+                log.info("✅ Step 2: Event constructed for {}", orderId);
+            } catch (Exception e) {
+                log.error("❌ Failed to construct event for {}: {}", orderId, e.getMessage(), e);
+                throw e;
+            }
+
+            // Step 3: queue event in outbox (published to Kafka by OutboxPublisher)
+            try {
+                outboxService.save("order-events", orderId, event);
+                log.info("✅ Step 3: Event queued for {}", orderId);
+            } catch (Exception e) {
+                log.error("❌ Failed to queue event for {}: {}", orderId, e.getMessage(), e);
+                throw e;
+            }
+
+            // Step 4: schedule cart clear after transaction commits — keeps HTTP call outside the DB transaction
+            Long userIdForCart = order.getUserId();
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    clearCart(userIdForCart);
+                }
+            });
+            log.info("✅ Step 4: Cart clear scheduled after commit for {}", orderId);
+
+            log.info("✅ confirmOrder completed: {}", orderId);
+        } catch (ObjectOptimisticLockingFailureException e) {
+            log.warn("[OPTIMISTIC LOCK] Concurrent modification on confirmOrder for orderId={}, skipping", orderId);
+        }
     }
 
     public ProductDTO getProduct(Long productId) {
@@ -309,6 +330,7 @@ public class OrderService {
     /**
      * SAGA: Stock deduction success
      */
+    @Transactional
     @KafkaListener(topics = "stock-deduction-success", groupId = "order-service")
     public void handleStockSuccess(StockDeductionSuccess event) {
         log.info("[SAGA] Stock deduction succeeded: {}", event.orderId());
@@ -318,6 +340,7 @@ public class OrderService {
     /**
      * SAGA: Stock deduction failed
      */
+    @Transactional
     @KafkaListener(topics = "stock-deduction-failed", groupId = "order-service")
     public void handleStockFailed(StockDeductionFailed event) {
         log.error("[SAGA] Stock deduction failed: {}, reason: {}",

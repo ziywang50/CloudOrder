@@ -35,9 +35,14 @@ dependencies {
 
 	//common module
 	implementation project(':common')
+	implementation 'io.micrometer:micrometer-tracing-bridge-otel'
+	implementation 'io.opentelemetry:opentelemetry-exporter-otlp'
 
 	//testing
 	testRuntimeOnly 'com.h2database:h2:2.2.224'
+
+	//actuator
+	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 }
 
 ext {

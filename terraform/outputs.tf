@@ -27,8 +27,12 @@ output "order_read_endpoint_3" {
 }
 
 
-output "redis_endpoint" {
-  value = aws_elasticache_cluster.redis.cache_nodes[0].address
+output "redis_primary_endpoint" {
+  value = aws_elasticache_replication_group.redis.primary_endpoint_address
+}
+
+output "redis_reader_endpoint" {
+  value = aws_elasticache_replication_group.redis.reader_endpoint_address
 }
 
 output "opensearch_endpoint" {
@@ -41,4 +45,16 @@ output "msk_bootstrap_brokers" {
 
 output "dynamodb_table_name" {
   value = aws_dynamodb_table.shopping_carts.name
+}
+
+output "locust_public_ip" {
+  value = aws_instance.locust.public_ip
+}
+
+output "locust_connect_command" {
+  value = "ssh -o StrictHostKeyChecking=no ec2-user@${aws_instance.locust.public_ip}"
+}
+
+output "locust_ui_url" {
+  value = "http://${aws_instance.locust.public_ip}:8089"
 }

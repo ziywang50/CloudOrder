@@ -57,9 +57,11 @@ resource "aws_iam_role_policy" "dynamodb_access" {
 	"dynamodb:DescribeTable"
       ]
       Resource = [
-	aws_dynamodb_table.shopping_carts.arn,
-  "${aws_dynamodb_table.shopping_carts.arn}/*"
-	]
+        aws_dynamodb_table.shopping_carts.arn,
+        "${aws_dynamodb_table.shopping_carts.arn}/*",
+        aws_dynamodb_table.products.arn,
+        "${aws_dynamodb_table.products.arn}/*"
+      ]
     }]
   })
 }

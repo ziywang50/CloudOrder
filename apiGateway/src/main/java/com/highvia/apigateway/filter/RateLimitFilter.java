@@ -34,6 +34,14 @@ public class RateLimitFilter implements GlobalFilter, Ordered {
             log.debug("Skipping rate limit for auth path: {}", path);
             return chain.filter(exchange);
         }
+        if (path.startsWith("/api/seckill/")) {
+            log.debug("Skipping rate limit for seckill path: {}", path);
+            return chain.filter(exchange);
+        }
+        if (path.startsWith("/api/debug/")) {                            
+            log.debug("Skipping rate limit for debug path: {}", path);
+            return chain.filter(exchange);
+        }
         String userId = exchange.getRequest().getHeaders().getFirst("X-User-Id");
         if (userId == null || userId.isEmpty()){
             log.error("X-User-Id header is missing after JWT validation");
