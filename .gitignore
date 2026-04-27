@@ -59,6 +59,7 @@ locust_tests/*.csv
 locust_tests/error_log.json
 locust_tests/*.png
 locust_tests/*.jpg
+locust_tests/**/*.png
 
 # 临时文件
 *.tmp
@@ -71,3 +72,4 @@ locust_tests/*.jpg
 deploy.ps1
 KNOWN_ISSUES.md
 .env
+
