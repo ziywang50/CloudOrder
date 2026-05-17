@@ -124,6 +124,14 @@ public class KafkaConfig {
     }
 
     @Bean
+    public NewTopic productDeletedTopic() {
+        return TopicBuilder.name("product-deleted")
+                .partitions(6)
+                .replicas(replicationFactor)
+                .build();
+    }
+
+    @Bean
     public NewTopic stockDeductionSuccessTopic() {
         return TopicBuilder.name("stock-deduction-success")
                 .partitions(6)

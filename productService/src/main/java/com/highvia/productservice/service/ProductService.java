@@ -8,6 +8,7 @@ import com.highvia.productservice.document.ProductDocument;
 import com.highvia.productservice.entity.ProductEntity;
 import com.highvia.common.events.StockUpdatedEvent;
 import com.highvia.productservice.events.ProductCreatedEvent;
+import com.highvia.productservice.events.ProductDeletedEvent;
 import com.highvia.productservice.repository.ProductElasticsearchRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -218,6 +219,8 @@ public class ProductService {
         } catch (Exception e) {
             log.error("Failed to delete product from ES: {}", e.getMessage());
         }
+        kafkaTemplate.send("product-deleted", String.valueOf(id),
+                new ProductDeletedEvent(id, LocalDateTime.now()));
         log.info("Product deleted: {}", id);
     }
 
