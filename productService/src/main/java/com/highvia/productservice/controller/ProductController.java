@@ -48,6 +48,11 @@ public class ProductController {
         return productQueryService.searchProducts(keyword);
     }
 
+    @GetMapping("/search/fuzzy")
+    public List<ProductDocument> fuzzySearchByName(@RequestParam String name) {
+        return productQueryService.fuzzySearchByName(name);
+    }
+
     @PutMapping("/{id}/deduct-stock")
     public void deductStock(@PathVariable Long id, @RequestBody DeductStockRequest request) {
         boolean success = productService.deductStock(id, request.quantity());

@@ -13,6 +13,8 @@ import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 
@@ -54,11 +56,11 @@ public class AuthController {
     }
 
     @PostMapping("/signup")
-    public Result signup(@RequestBody RegisterDto dto,
+    public ResponseEntity<Result> signup(@RequestBody RegisterDto dto,
                          HttpServletResponse response) throws Exception {  // 加HttpServletResponse
         // 1. Check if exists
         if (customerRepository.existsByEmail(dto.email())) {
-            return Result.error("Email already exists");
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Result.error("Email already exists"));
         }
 
         // 2. Create customer
@@ -89,7 +91,7 @@ public class AuthController {
         response.addCookie(cookie);
 
         // 5. Return success with token
-        return Result.success("Registration successful, logged in automatically");
+        return ResponseEntity.ok(Result.success("Registration successful, logged in automatically"));
     }
 
     @PostMapping ("/signup/admin")
@@ -139,17 +141,22 @@ public class AuthController {
     }
 
     @PostMapping("/login")
-    public Result login(@RequestBody LoginRequest request,
+    public ResponseEntity<Result> login(@RequestBody LoginRequest request,
                         HttpServletResponse response) throws Exception {
-        //find customer my email
+        //find customer by email
         long t0 = System.currentTimeMillis();
-        CustomerEntity customer = customerRepository.findByEmail(request.email())
-                .orElseThrow(() -> new RuntimeException("User not found"));
+        var optionalCustomer = customerRepository.findByEmail(request.email());
         log.info("DB time: {}", System.currentTimeMillis() - t0);
+
+        if (optionalCustomer.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Result.error("Invalid email or password"));
+        }
+        CustomerEntity customer = optionalCustomer.get();
 
         long t1 = System.currentTimeMillis();
         if (!passwordEncoder.matches(request.password(), customer.getPassword())) {
-            throw new RuntimeException("Invalid password");
+            log.info("bcrypt time: {}", System.currentTimeMillis() - t1);
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Result.error("Invalid email or password"));
         }
         log.info("bcrypt time: {}", System.currentTimeMillis() - t1);
 
@@ -169,10 +176,10 @@ public class AuthController {
         // 4. Set cookie
         response.addCookie(createCookie("CS_TOKEN", accessToken, 1800));
         response.addCookie(createCookie("CS_REFRESH_TOKEN", refreshToken, 604800));
-        return Result.success(Map.of(
+        return ResponseEntity.ok(Result.success(Map.of(
                 "accessToken", accessToken,
                 "refreshToken", refreshToken
-        ));
+        )));
     }
 
     @PostMapping("/refresh")

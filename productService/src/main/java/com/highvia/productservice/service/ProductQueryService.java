@@ -9,6 +9,11 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
+import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
+import org.springframework.data.elasticsearch.core.SearchHit;
+import org.springframework.data.elasticsearch.core.query.Query;
+import org.springframework.data.elasticsearch.client.elc.NativeQuery;
+
 import java.util.List;
 
 @Service
@@ -16,6 +21,7 @@ import java.util.List;
 @Slf4j
 public class ProductQueryService {
     private final ProductElasticsearchRepository elasticsearchRepository;
+    private final ElasticsearchOperations elasticsearchOperations;
 
     @KafkaListener(topics = "product-events", groupId = "product-query-service")
     public void handleProductCreated(ProductCreatedEvent event) {
@@ -35,6 +41,21 @@ public class ProductQueryService {
 
     public List<ProductDocument> searchProducts(String keyword) {
         return elasticsearchRepository.findByNameContaining(keyword);
+    }
+
+    public List<ProductDocument> fuzzySearchByName(String name) {
+        Query query = NativeQuery.builder()
+                .withQuery(q -> q.match(m -> m
+                        .field("name")
+                        .query(name)
+                        .fuzziness("AUTO")))
+                .build();
+
+        return elasticsearchOperations.search(query, ProductDocument.class)
+                .getSearchHits()
+                .stream()
+                .map(SearchHit::getContent)
+                .toList();
     }
 
     public ProductDocument getProductById(Long id) {

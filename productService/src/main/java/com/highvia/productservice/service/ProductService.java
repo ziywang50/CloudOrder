@@ -21,12 +21,14 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class ProductService {
+    private static final String TABLE_NAME = "Products";
     private final AtomicLong idGenerator = new AtomicLong(1);
     private final AmazonDynamoDB amazonDynamoDB;
     private final DynamoDBMapper dynamoDBMapper;
@@ -43,7 +45,7 @@ public class ProductService {
     public void init() {
         try {
             CreateTableRequest request = new CreateTableRequest()
-                    .withTableName("Products")
+                    .withTableName(TABLE_NAME)
                     .withKeySchema(
                             new KeySchemaElement("productId", KeyType.HASH)
                     )
@@ -53,9 +55,9 @@ public class ProductService {
                     .withBillingMode(BillingMode.PAY_PER_REQUEST);
 
             amazonDynamoDB.createTable(request);
-            System.out.println(" DynamoDB table created: Products");
+            System.out.println(" DynamoDB table created: " + TABLE_NAME);
         } catch (ResourceInUseException e) {
-            System.out.println(" Table already exists: Products");
+            System.out.println(" Table already exists: " + TABLE_NAME);
         } catch (Exception e) {
             System.err.println(" DynamoDB error: " + e.getMessage());
         }
@@ -83,87 +85,72 @@ public class ProductService {
     }
 
     public boolean addStock(Long productId, Integer quantity) {
-        int maxRetries = 3;
-        for (int i = 0; i < maxRetries; i++) {
-            try {
-                ProductEntity product = dynamoDBMapper.load(ProductEntity.class, productId);
-                if (product == null) {
-                    log.error("Product not found for rollback: {}", productId);
-                    return false;
-                }
+        try {
+            Map<String, AttributeValue> key = Map.of(
+                    "productId", new AttributeValue().withN(String.valueOf(productId)));
+            Map<String, AttributeValue> values = Map.of(
+                    ":qty", new AttributeValue().withN(String.valueOf(quantity)),
+                    ":one", new AttributeValue().withN("1"));
 
-                product.setStock(product.getStock() + quantity);
-                dynamoDBMapper.save(product);
-                syncToElasticsearch(product); //sync to ES
+            UpdateItemRequest request = new UpdateItemRequest()
+                    .withTableName(TABLE_NAME)
+                    .withKey(key)
+                    .withUpdateExpression("SET stock = stock + :qty, version = version + :one")
+                    .withConditionExpression("attribute_exists(stock)")
+                    .withExpressionAttributeValues(values)
+                    .withReturnValues(ReturnValue.UPDATED_NEW);
 
-                log.info("Stock added: product={}, +{}", productId, quantity);
-                kafkaTemplate.send("stock-updated", String.valueOf(productId),
-                        new StockUpdatedEvent(productId, product.getStock(), System.currentTimeMillis()));
-                return true;
-            } catch (ConditionalCheckFailedException e) {
-                log.warn("Version conflict on addStock, retry {}/{}", i + 1, maxRetries);
+            UpdateItemResult result = amazonDynamoDB.updateItem(request);
+            int newStock = Integer.parseInt(result.getAttributes().get("stock").getN());
 
-                if (i < maxRetries - 1) {
-                    try {
-                        Thread.sleep(50);
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        return false;
-                    }
-                }
-            }
+            syncToElasticsearch(productId, newStock);
+            log.info("Stock added: product={}, +{}, new stock={}", productId, quantity, newStock);
+            kafkaTemplate.send("stock-updated", String.valueOf(productId),
+                    new StockUpdatedEvent(productId, newStock, System.currentTimeMillis()));
+            return true;
+
+        } catch (ConditionalCheckFailedException e) {
+            log.error("Product not found for stock addition: {}", productId);
+            return false;
+        } catch (Exception e) {
+            log.error("Error adding stock: {}", e.getMessage());
+            return false;
         }
-        return false;
     }
 
     public boolean deductStock(Long productId, Integer quantity) {
-        int maxRetries = 3;
+        try {
+            Map<String, AttributeValue> key = Map.of(
+                    "productId", new AttributeValue().withN(String.valueOf(productId)));
+            Map<String, AttributeValue> values = Map.of(
+                    ":qty", new AttributeValue().withN(String.valueOf(quantity)),
+                    ":one", new AttributeValue().withN("1"));
 
-        for (int i = 0; i < maxRetries; i++) {
-            try {
-                ProductEntity product = dynamoDBMapper.load(ProductEntity.class, productId);
+            UpdateItemRequest request = new UpdateItemRequest()
+                    .withTableName(TABLE_NAME)
+                    .withKey(key)
+                    .withUpdateExpression("SET stock = stock - :qty, version = version + :one")
+                    .withConditionExpression("attribute_exists(stock) AND stock >= :qty")
+                    .withExpressionAttributeValues(values)
+                    .withReturnValues(ReturnValue.UPDATED_NEW);
 
-                if (product == null) {
-                    log.error("Product not found: {}", productId);
-                    return false;
-                }
+            UpdateItemResult result = amazonDynamoDB.updateItem(request);
+            int newStock = Integer.parseInt(result.getAttributes().get("stock").getN());
 
-                if (product.getStock() < quantity) {
-                    log.warn("Insufficient stock for {}: required={}, available={}",
-                            productId, quantity, product.getStock());
-                    return false;
-                }
+            syncToElasticsearch(productId, newStock);
+            log.info("Stock deducted: product={}, quantity={}, remaining={}",
+                    productId, quantity, newStock);
+            kafkaTemplate.send("stock-updated", String.valueOf(productId),
+                    new StockUpdatedEvent(productId, newStock, System.currentTimeMillis()));
+            return true;
 
-                product.setStock(product.getStock() - quantity);
-                dynamoDBMapper.save(product);  // Optimistic Locking
-                syncToElasticsearch(product); //sync to ES
-
-                log.info("Stock deducted: product={}, quantity={}, remaining={}",
-                        productId, quantity, product.getStock());
-                kafkaTemplate.send("stock-updated", String.valueOf(productId),
-                        new StockUpdatedEvent(productId, product.getStock(), System.currentTimeMillis()));
-                return true;
-
-            } catch (ConditionalCheckFailedException e) {
-                log.warn("Optimistic lock conflict on product {}, retry {}/{}",
-                        productId, i + 1, maxRetries);
-
-                if (i < maxRetries - 1) {
-                    try {
-                        Thread.sleep(50 * (i + 1));
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        return false;
-                    }
-                }
-            } catch (Exception e) {
-                log.error("Error deducting stock: {}", e.getMessage());
-                return false;
-            }
+        } catch (ConditionalCheckFailedException e) {
+            log.warn("Deduct stock failed for product {} (not found or insufficient stock)", productId);
+            return false;
+        } catch (Exception e) {
+            log.error("Error deducting stock: {}", e.getMessage());
+            return false;
         }
-
-        log.error("Failed to deduct stock after {} retries", maxRetries);
-        return false;
     }
 
     public ProductEntity createProduct(ProductEntity product) {
@@ -171,6 +158,7 @@ public class ProductService {
             product.setProductId(System.currentTimeMillis());
         }
         dynamoDBMapper.save(product);
+        syncToElasticsearch(product);
 
         log.info("product {} is created", product.getProductId());
         //send kafka event
@@ -193,6 +181,7 @@ public class ProductService {
         try {
             updated.setProductId(id);
             dynamoDBMapper.save(updated);
+            syncToElasticsearch(updated);
 
             ProductCreatedEvent event = new ProductCreatedEvent(
                     updated.getProductId(),
@@ -223,6 +212,12 @@ public class ProductService {
         //ProductEntity product = new ProductEntity();
         //product.setProductId(id);
         dynamoDBMapper.delete(product);
+        try {
+            productRepository.deleteById(id.toString());
+            log.info("Product deleted from ES: {}", id);
+        } catch (Exception e) {
+            log.error("Failed to delete product from ES: {}", e.getMessage());
+        }
         log.info("Product deleted: {}", id);
     }
 
@@ -232,13 +227,36 @@ public class ProductService {
                     .findById(product.getProductId().toString())
                     .orElse(null);
 
+            if (doc == null) {
+                doc = ProductDocument.builder()
+                        .id(product.getProductId().toString())
+                        .productId(product.getProductId())
+                        .build();
+            }
+
+            doc.setName(product.getName());
+            doc.setDescription(product.getDescription());
+            doc.setPrice(product.getPrice());
+            doc.setStock(product.getStock());
+            productRepository.save(doc);
+            log.info("ES synced (full): product={}", product.getProductId());
+        } catch (Exception e) {
+            log.error("Failed to sync to ES: {}", e.getMessage());
+        }
+    }
+
+    private void syncToElasticsearch(Long productId, Integer newStock) {
+        try {
+            ProductDocument doc = productRepository
+                    .findById(productId.toString())
+                    .orElse(null);
+
             if (doc != null) {
-                doc.setStock(product.getStock());
+                doc.setStock(newStock);
                 productRepository.save(doc);
-                log.info("ES synced: product={}, stock={}",
-                        product.getProductId(), product.getStock());
+                log.info("ES synced: product={}, stock={}", productId, newStock);
             } else {
-                log.warn("Product not found in ES: {}", product.getProductId());
+                log.warn("Product not found in ES: {}", productId);
             }
         } catch (Exception e) {
             log.error("Failed to sync to ES: {}", e.getMessage());
