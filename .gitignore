@@ -4,6 +4,11 @@
 *.war
 *.ear
 
+# Gradle wrapper bootstrap JAR must be committed so a fresh clone can run
+# ./gradlew without a preinstalled Gradle. Re-included from the *.jar rule above.
+!gradle/wrapper/gradle-wrapper.jar
+!**/gradle/wrapper/gradle-wrapper.jar
+
 # Maven
 target/
 pom.xml.tag
